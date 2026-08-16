@@ -1367,6 +1367,9 @@ function renderGame(): void {
   // 2026-08-16: 카운트다운 폴링 안전망 — setTimeout이 어떤 이유로 fire 안 해도
   // 매 프레임 (render loop) 카운트다운 텍스트가 시간에 맞춰 갱신되도록
   // update 콜백에서 호출됨
+  // - Pass 8.1: 직접 텍스트 갱신 + playing 전환 (setTimeout 의존 X)
+  // - 1차 시도(setTimeout 50ms 후 tickCountdown 호출)도 setTimeout 자체가
+  //   fire 안 하는 환경이면 무한 대기 → 이게 '3' 멈춤의 진짜 원인
   function pumpCountdownFallback(): void {
     if (roundState !== 'countdown') return;
     const elapsed = performance.now() - countdownStartedAt;
@@ -1374,15 +1377,53 @@ function renderGame(): void {
       countdownSequence.length,
       Math.floor(elapsed / COUNTDOWN_STEP_TOTAL),
     );
-    if (expectedIdx > countdownIdx) {
-      console.warn(
-        `[countdown 폴링 안전망] setTimeout 멈춤 감지 — idx ${countdownIdx} → ${expectedIdx}로 강제 전환`,
-      );
-      countdownIdx = expectedIdx;
-      // 다음 tickCountdown 호출 (gap 후)
-      trackTimeout(tickCountdown, 50);
+    if (expectedIdx <= countdownIdx) return;
+
+    console.warn(
+      `[countdown 폴링 안전망] setTimeout 멈춤 감지 — idx ${countdownIdx} → ${expectedIdx}로 강제 전환`,
+    );
+    countdownIdx = expectedIdx;
+
+    if (countdownIdx >= countdownSequence.length) {
+      // 2026-08-16: 직접 playing으로 전환 (setTimeout 무관)
+      countdownEl.classList.remove('show');
+      roundState = 'playing';
+      roundTime = GAME.roundSeconds;
+      roundStats.startedAt = performance.now();
+      if (taggerAI) taggerAI.setFrozen(true);
+      graceTimeLeft = ROUND_START_GRACE_SEC;
+      try {
+        if (sound) sound.playAbsorbStart();
+      } catch (err) {
+        console.warn('[countdown] playAbsorbStart 실패', err);
+      }
+      triggerShake(0.3);
+    } else {
+      // 2026-08-16: 텍스트도 직접 갱신 (setTimeout 콜백 안 거치고)
+      if (countdownText) countdownText.textContent = countdownSequence[countdownIdx];
+      countdownEl.classList.add('show');
+      // 비프음도 직접
+      if (sound && countdownIdx < 3) {
+        try {
+          sound.playFootstep(0.6);
+        } catch (err) {
+          console.warn('[countdown] playFootstep 실패', err);
+        }
+      }
     }
   }
+
+  // 2026-08-16: setInterval 추가 안전망 — requestAnimationFrame이 throttle되거나
+  // render loop가 어떤 이유로 fire 안 해도 200ms마다 강제 진행
+  const safetyInterval = setInterval(() => {
+    if (roundState !== 'countdown') {
+      clearInterval(safetyInterval);
+      return;
+    }
+    pumpCountdownFallback();
+  }, 200);
+  // teardownGame에서 clear되도록 disposers에 등록
+  game.disposers.push(() => clearInterval(safetyInterval));
 
   // 결과 표시 (Fall Guys WIN! / ELIMINATED! 카툰 스타일)
   function showResult(winner: 'tagger' | 'runner', reason: string): void {
