@@ -1318,6 +1318,14 @@ function renderGame(): void {
   // 2026-08-15: 라운드 시작 후 2초 그레이스 (술래 동결) — 도망자 즉시 OUT 방지
   const ROUND_START_GRACE_SEC = 2.0;
   let graceTimeLeft = 0;
+  // 2026-08-16: 카운트다운 안전망 — performance.now() 기반 폴링
+  // - 증상: 어떤 환경에서 setTimeout이 fire 안 해서 '3'에서 멈춤
+  // - 픽스: 매 프레임 update()에서 경과 시간 체크, setTimeout이 fire 안 해도
+  //   performance.now() 기반으로 다음 카운트다운 텍스트로 강제 전환
+  const countdownStartedAt = performance.now();
+  const COUNTDOWN_STEP_MS = 800; // 각 카운트다운 표시 시간
+  const COUNTDOWN_GAP_MS = 250; // 카운트다운 사이 갭
+  const COUNTDOWN_STEP_TOTAL = COUNTDOWN_STEP_MS + COUNTDOWN_GAP_MS; // 1050ms per step
   function tickCountdown(): void {
     if (countdownIdx >= countdownSequence.length) {
       countdownEl.classList.remove('show');
@@ -1328,22 +1336,53 @@ function renderGame(): void {
       if (taggerAI) taggerAI.setFrozen(true);
       graceTimeLeft = ROUND_START_GRACE_SEC;
       // v34: GO! 사운드 + 셰이크
-      if (sound) sound.playAbsorbStart();
+      if (sound) {
+        try {
+          sound.playAbsorbStart();
+        } catch (err) {
+          console.warn('[countdown] playAbsorbStart 실패', err);
+        }
+      }
       triggerShake(0.3);
       return;
     }
     if (countdownText) countdownText.textContent = countdownSequence[countdownIdx];
     countdownEl.classList.add('show');
-    // v34: 카운트다운 비프음 (절대 피치로 3,2,1)
-    if (sound && countdownIdx < 3) sound.playFootstep(0.6);
+    // v34: 카운트다운 비프음 (절대 피치로 3,2,1) — try/catch로 throw 방어
+    if (sound && countdownIdx < 3) {
+      try {
+        sound.playFootstep(0.6);
+      } catch (err) {
+        console.warn('[countdown] playFootstep 실패 (계속 진행)', err);
+      }
+    }
     // 다음 카운트다운
     trackTimeout(() => {
       countdownEl.classList.remove('show');
       countdownIdx++;
-      trackTimeout(tickCountdown, 250); // 0.25s 갭
-    }, 800);
+      trackTimeout(tickCountdown, COUNTDOWN_GAP_MS);
+    }, COUNTDOWN_STEP_MS);
   }
   tickCountdown();
+  // 2026-08-16: 카운트다운 폴링 안전망 — setTimeout이 어떤 이유로 fire 안 해도
+  // 매 프레임 (render loop) 카운트다운 텍스트가 시간에 맞춰 갱신되도록
+  // update 콜백에서 호출됨
+  function pumpCountdownFallback(): void {
+    if (roundState !== 'countdown') return;
+    const elapsed = performance.now() - countdownStartedAt;
+    const expectedIdx = Math.min(
+      countdownSequence.length,
+      Math.floor(elapsed / COUNTDOWN_STEP_TOTAL),
+    );
+    if (expectedIdx > countdownIdx) {
+      console.warn(
+        `[countdown 폴링 안전망] setTimeout 멈춤 감지 — idx ${countdownIdx} → ${expectedIdx}로 강제 전환`,
+      );
+      countdownIdx = expectedIdx;
+      // 다음 tickCountdown 호출 (gap 후)
+      trackTimeout(tickCountdown, 50);
+    }
+  }
 
   // 결과 표시 (Fall Guys WIN! / ELIMINATED! 카툰 스타일)
   function showResult(winner: 'tagger' | 'runner', reason: string): void {
@@ -2124,6 +2163,8 @@ function renderGame(): void {
 
     // 2026-08-15: 카운트다운 중에는 입력 차단 (시각만 진행)
     if (roundState === 'countdown') {
+      // 2026-08-16: 카운트다운 폴링 안전망 — setTimeout fire 안 해도 강제 전환
+      pumpCountdownFallback();
       // 2026-08-15: 인트로 시네마틱 카메라 (고공 → 추적 위치)
       const introT = Math.min(1, (performance.now() - gameStartedAt) / (introDuration * 1000));
       // Easing: cubic ease-in-out
