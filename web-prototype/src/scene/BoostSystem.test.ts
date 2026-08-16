@@ -65,7 +65,9 @@ describe('BoostSystem (술래 부스터 상태머신)', () => {
     it('부스터 active 중 → speedMul = 1.5x × fatigue 보정', () => {
       boost.trigger();
       // fatigue=18 → 1.0 - 0.4 * 0.18 = 0.928 → × 1.5 = 1.392
-      const expected = (1.0 - (1.0 - GAME.boostFatigueSpeedMul) * (GAME.boostFatiguePerUse / 100)) * GAME.boostActiveSpeedMul;
+      const expected =
+        (1.0 - (1.0 - GAME.boostFatigueSpeedMul) * (GAME.boostFatiguePerUse / 100)) *
+        GAME.boostActiveSpeedMul;
       expect(boost.getSpeedMultiplier()).toBeCloseTo(expected, 5);
       // 1.0보다 큰지 확인 (실제 가속됨)
       expect(boost.getSpeedMultiplier()).toBeGreaterThan(1.0);
