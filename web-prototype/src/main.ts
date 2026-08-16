@@ -189,7 +189,8 @@ const characters: Array<{ id: CharacterId; label: string; color: string }> = [
   { id: 'runner-cyan', label: '시안', color: '#4dd0e1' },
   { id: 'runner-yellow', label: '옐로우', color: '#ffd83d' },
   { id: 'runner-purple', label: '퍼플', color: '#9b59b6' },
-  { id: 'runner-pink', label: '핑크', color: '#ff5c8a' },
+  // 2026-08-16: 술래(#ff5c8a)와 구별되는 라이트 핑크
+  { id: 'runner-pink', label: '핑크', color: '#ff9eb5' },
 ];
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -364,8 +365,9 @@ function renderLogin(): void {
       input.focus();
       return;
     }
-    // 2026-08-16: XSS 방지 — 입력 시 1회 escape. 이후 innerHTML 보간 모두 안전.
-    profile.nickname = escapeHtml(nickname);
+    // 2026-08-16: nickname은 raw로 저장. innerHTML 보간하는 곳(lobby/room/role/result)에서만 escapeHtml()로 감싸기.
+    // (캔버스 3D 라벨에는 escape된 글자가 그대로 그려지는 문제 방지)
+    profile.nickname = nickname;
     // v32: 캐릭터 선택은 room 안으로 — role로 직행
     setScreen('role');
   };
@@ -382,7 +384,7 @@ function renderRole(): void {
   const content = document.createElement('section');
   content.className = 'screen screen-role';
   content.innerHTML = `
-    <div class="role-eyebrow">STEP 2 / 2 · <span class="muted">${profile.nickname}님</span></div>
+    <div class="role-eyebrow">STEP 2 / 2 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
     <h1 class="role-title">역할 선택</h1>
     <p class="role-sub">ff팀, 이번 판에서 어떤 역할을 하시겠어요?</p>
     <div class="role-grid">
@@ -459,7 +461,7 @@ function renderLobby(): void {
   const content = document.createElement('section');
   content.className = 'screen screen-lobby';
   content.innerHTML = `
-    <div class="lobby-eyebrow">로비 · <span class="muted">${profile.nickname}님</span></div>
+    <div class="lobby-eyebrow">로비 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
     <h1 class="lobby-title">로비</h1>
     <p class="lobby-sub">ff팀, 게임을 시작할 방을 선택하세요.</p>
     <div class="lobby-summary">
@@ -469,7 +471,7 @@ function renderLobby(): void {
       </div>
       <div class="lobby-summary-card">
         <span class="lobby-summary-label">닉네임</span>
-        <strong class="lobby-summary-value">${profile.nickname}</strong>
+        <strong class="lobby-summary-value">${escapeHtml(profile.nickname)}</strong>
       </div>
       <div class="lobby-summary-card">
         <span class="lobby-summary-label">모드</span>
@@ -534,7 +536,7 @@ function renderRoom(): void {
   const isCreate = roomMode === 'create';
   const mapEntries = Object.entries(MAPS);
   content.innerHTML = `
-    <div class="room-eyebrow">${isCreate ? '방 대기실' : '방 찾기'} · <span class="muted">${profile.nickname}님</span></div>
+    <div class="room-eyebrow">${isCreate ? '방 대기실' : '방 찾기'} · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
     <h1 class="room-title">${isCreate ? '방 대기실' : '방 찾기'}</h1>
     <p class="room-sub">${isCreate ? '캐릭터와 맵을 정하고 친구를 기다리세요.' : '캐릭터와 맵을 정하고 시작하세요.'}</p>
     <div class="room-hero">
@@ -560,7 +562,7 @@ function renderRoom(): void {
     <div class="room-players">
       <div class="room-player room-player-self">
         <span class="room-player-dot" id="room-self-dot" style="background:${characters.find((c) => c.id === profile.characterId)?.color ?? '#00e5ff'}"></span>
-        <span class="room-player-name">${profile.nickname}</span>
+        <span class="room-player-name">${escapeHtml(profile.nickname)}</span>
         <span class="room-player-status ready" id="room-self-status">준비 전</span>
       </div>
       <div class="room-player room-player-empty"><span class="room-player-empty-icon">+</span> 빈 자리</div>
@@ -1262,6 +1264,8 @@ function renderGame(): void {
         <div class="result-stat"><span>생존</span><strong id="result-time">0:00</strong></div>
         <div class="result-stat"><span>자국 흡수</span><strong id="result-absorbed">0</strong></div>
         <div class="result-stat"><span>OUT</span><strong id="result-out">0</strong></div>
+        <div class="result-stat"><span>얼림</span><strong id="result-ice">0</strong></div>
+        <div class="result-stat"><span>부스터</span><strong id="result-boost">0</strong></div>
       </div>
       <div class="result-actions">
         <button type="button" class="button primary" id="result-retry">🔄 한 판 더!</button>
@@ -1275,6 +1279,8 @@ function renderGame(): void {
   const resultTimeEl = resultOverlay.querySelector<HTMLElement>('#result-time');
   const resultAbsorbedEl = resultOverlay.querySelector<HTMLElement>('#result-absorbed');
   const resultOutEl = resultOverlay.querySelector<HTMLElement>('#result-out');
+  const resultIceEl = resultOverlay.querySelector<HTMLElement>('#result-ice');
+  const resultBoostEl = resultOverlay.querySelector<HTMLElement>('#result-boost');
   const resultMedalEl = resultOverlay.querySelector<HTMLElement>('#result-medal');
   const resultRetryBtn = resultOverlay.querySelector<HTMLButtonElement>('#result-retry');
   const resultLobbyBtn = resultOverlay.querySelector<HTMLButtonElement>('#result-lobby');
@@ -1356,6 +1362,8 @@ function renderGame(): void {
     }
     if (resultAbsorbedEl) resultAbsorbedEl.textContent = String(roundStats.absorbed);
     if (resultOutEl) resultOutEl.textContent = String(roundStats.outCount);
+    if (resultIceEl) resultIceEl.textContent = String(roundStats.iceUsed);
+    if (resultBoostEl) resultBoostEl.textContent = String(roundStats.boostUsed);
     // v34: 승/패 사운드 + 컨페티
     if (sound) {
       if (userWon) sound.playWin();
@@ -1757,6 +1765,7 @@ function renderGame(): void {
       sound.playIce();
       // 2026-08-15: 술래 위치에 서리 버스트 (얼음 파티클)
       if (dust) dust.burst(aiMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
+      roundStats.iceUsed += 1; // 2026-08-16: 결과 화면 통계
     }
   };
 
@@ -1803,7 +1812,9 @@ function renderGame(): void {
     if (e.code !== GAME.boostKey && e.code !== (GAME.boostKeyAlt ?? 'KeyB')) return;
     if (!isTagger || !boost) return; // 술래만 사용 가능
     if (game.out) return;
-    boost.trigger();
+    if (boost.trigger()) {
+      roundStats.boostUsed += 1; // 2026-08-16: 발동 성공 시만 카운트 (쿨다운/stall 중 실패 제외)
+    }
     triggerShake(0.25); // 2026-08-15: 부스터 발동 시 작은 임팩트
     sound.playBoost(); // 2026-08-15: 부스터 whoosh SFX
     // 2026-08-15: 부스터 스파크 버스트 (자기 발밑)
@@ -1930,6 +1941,7 @@ function renderGame(): void {
       if (ice.triggerIfReady(dist)) {
         sound.playIce();
         if (dust) dust.burst(aiMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
+        roundStats.iceUsed += 1; // 2026-08-16: 결과 화면 통계
       }
     });
     iceWrap.appendChild(iceBtn);

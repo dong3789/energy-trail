@@ -83,6 +83,18 @@ describe('config invariants', () => {
     it('tagger 색상이 핑크 (Vibe E)', () => {
       expect(PLAYER.taggerColor).toBe(0xff5c8a);
     });
+
+    it('runner 색상 4종 정의 (cyan/yellow/purple/pink) — 캐릭터 선택 UI와 일치', () => {
+      expect(PLAYER.runnerColors['runner-cyan']).toBeDefined();
+      expect(PLAYER.runnerColors['runner-yellow']).toBeDefined();
+      expect(PLAYER.runnerColors['runner-purple']).toBeDefined();
+      expect(PLAYER.runnerColors['runner-pink']).toBeDefined();
+    });
+
+    it('runner-pink 색상이 tagger와 다름 (실제 색상 구분)', () => {
+      // 핑크가 tagger 색상이면 플레이어가 술래/도망자 구별 불가
+      expect(PLAYER.runnerColors['runner-pink']).not.toBe(PLAYER.taggerColor);
+    });
   });
 
   describe('OBSTACLES_BY_MAP', () => {

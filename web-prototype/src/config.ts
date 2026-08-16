@@ -390,6 +390,8 @@ export const PLAYER = {
     'runner-cyan': 0x4dd0e1, // v30: Fall Guys 시안
     'runner-yellow': 0xffd83d, // v30: Fall Guys 옐로우
     'runner-purple': 0x9b59b6, // v30: Fall Guys 퍼플
+    // 2026-08-16: runner-pink은 tagger(#ff5c8a)와 색이 다름 — 술래(항상 핑크)와 도망자 핑크 구분
+    'runner-pink': 0xff9eb5, // 라이트 핑크 (tagger보다 연함)
   } as Record<string, number>,
 } as const;
 

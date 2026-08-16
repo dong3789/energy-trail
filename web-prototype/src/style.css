@@ -1270,6 +1270,12 @@ input.invalid {
   margin-bottom: 20px;
   position: relative;
 }
+/* 2026-08-16: 5개 통계 (생존/흡수/OUT/얼림/부스터) — 좁은 화면은 2열, 넓으면 5열 */
+@media (min-width: 540px) {
+  .result-stats {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
 
 .result-stat {
   display: grid;
@@ -1285,6 +1291,12 @@ input.invalid {
 }
 .result-stat:nth-child(3) {
   background: #ff85c1;
+}
+.result-stat:nth-child(4) {
+  background: #c4b4f4;
+}
+.result-stat:nth-child(5) {
+  background: #ffb4d4;
 }
 
 .result-stat span {

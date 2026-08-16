@@ -47,4 +47,26 @@ describe('escapeHtml (XSS 방지)', () => {
     // (사용자 입력이 escape된 값을 다시 escape하면 발생 가능 — nickname은 입력 1회만)
     expect(escapeHtml('&amp;')).toBe('&amp;amp;');
   });
+
+  it('이모지 보존', () => {
+    // 이모지/한글/유니코드는 escape 안 됨
+    expect(escapeHtml('🎮 한글')).toBe('🎮 한글');
+    expect(escapeHtml('⭐️💎')).toBe('⭐️💎');
+  });
+
+  it('공백/개행 보존', () => {
+    expect(escapeHtml('한글 닉네임')).toBe('한글 닉네임');
+    expect(escapeHtml('A B C')).toBe('A B C');
+  });
+
+  it('숫자만', () => {
+    expect(escapeHtml('12345')).toBe('12345');
+    expect(escapeHtml('0')).toBe('0');
+  });
+
+  it('속성 값 (작은따옴표, 큰따옴표 모두 escape)', () => {
+    // XSS 방어 핵심 — 속성 값에 사용할 때 안전
+    expect(escapeHtml(`" onerror="alert(1)`)).toBe('&quot; onerror=&quot;alert(1)');
+    expect(escapeHtml(`' onmouseover='alert(1)`)).toBe('&#39; onmouseover=&#39;alert(1)');
+  });
 });
