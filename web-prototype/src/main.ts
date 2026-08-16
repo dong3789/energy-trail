@@ -13,7 +13,7 @@ import {
   type SpeedTier,
 } from './config';
 import { createScene, startRenderLoop, type SceneContext } from './scene/SceneSetup';
-import { buildMap, buildExitPoint } from './scene/MapBuilder';
+import { buildMap, buildExitPoint, disposeMap } from './scene/MapBuilder';
 import { PlayerController } from './scene/PlayerController';
 import { TaggerAI } from './scene/TaggerAI';
 import { TrailEmitter } from './scene/TrailEmitter';
@@ -69,6 +69,14 @@ interface GameState {
    * - addTrackedListener/trackTimer 헬퍼로 push
    */
   disposers: Array<() => void>;
+  /**
+   * 2026-08-16: 맵 자원 참조 — teardownGame에서 disposeMap()으로 GPU 메모리 해제
+   */
+  mapRefs: import('./scene/MapBuilder').MapRefs | null;
+  /**
+   * 2026-08-16: 출구 지점 메시 — teardownGame에서 dispose
+   */
+  exitDisc: THREE.Mesh | null;
 }
 
 // 2026-08-09 v2: 캐릭터 식별용 머리 위 라벨 (캔버스 → Sprite). 카메라 오비팅과 무관하게 항상 정면.
@@ -231,6 +239,8 @@ const game: GameState = {
   absorb: null,
   absorbHud: null,
   disposers: [],
+  mapRefs: null,
+  exitDisc: null,
 };
 
 // 2026-08-16: 추적형 리스너 등록 — teardown에서 자동 해제
@@ -1177,6 +1187,8 @@ function renderGame(): void {
   const ctx = createScene(canvasHost, mapDef);
   const mapRefs = buildMap(ctx.scene, mapDef);
   const exitDisc = buildExitPoint(ctx.scene);
+  game.mapRefs = mapRefs;
+  game.exitDisc = exitDisc;
   // 출구 위치 (XZ 평면, Y 무시)
   const exitPos = new THREE.Vector3(exitDisc.position.x, 0, exitDisc.position.z);
   const exitRadius = 1.4; // buildExitPoint의 CylinderGeometry radius와 일치
@@ -2760,6 +2772,23 @@ function teardownGame(): void {
     }
   }
   game.disposers = [];
+
+  // 2026-08-16: 맵 자원 dispose (GPU 메모리 해제)
+  if (game.mapRefs) {
+    disposeMap(game.mapRefs);
+    game.mapRefs = null;
+  }
+  if (game.exitDisc) {
+    game.exitDisc.geometry.dispose();
+    // material은 단일 또는 배열일 수 있음
+    if (Array.isArray(game.exitDisc.material)) {
+      game.exitDisc.material.forEach((m) => m.dispose());
+    } else {
+      game.exitDisc.material.dispose();
+    }
+    if (game.exitDisc.parent) game.exitDisc.parent.remove(game.exitDisc);
+    game.exitDisc = null;
+  }
 
   // 2026-08-15: 발사체는 renderGame 종료와 함께 GC되므로 별도 정리 불필요
   // (scene.dispose()에서 mesh 제거됨)

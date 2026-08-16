@@ -21,6 +21,53 @@ export interface MapRefs {
   trees: TreeRefs;
 }
 
+/**
+ * 2026-08-16: 맵 자원 일괄 해제
+ * - buildMap()이 생성한 모든 geometry/material을 dispose
+ * - teardownGame에서 호출 → GPU 메모리 누수 방지
+ */
+function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
+  if (Array.isArray(material)) {
+    material.forEach((m) => m.dispose());
+  } else {
+    material.dispose();
+  }
+}
+
+export function disposeMap(mapRefs: MapRefs): void {
+  // Floor
+  if (mapRefs.floor instanceof THREE.Mesh) {
+    mapRefs.floor.geometry.dispose();
+    disposeMaterial(mapRefs.floor.material);
+  }
+  // Walls
+  mapRefs.walls.forEach((m) => {
+    m.geometry.dispose();
+    disposeMaterial(m.material);
+  });
+  // Obstacles
+  mapRefs.obstacles.forEach((m) => {
+    m.geometry.dispose();
+    disposeMaterial(m.material);
+  });
+  // Buildings
+  mapRefs.buildings.forEach((m) => {
+    m.geometry.dispose();
+    // building.add(win) 형태로 자식 mesh 포함 → traverse로 자식도 dispose
+    m.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        disposeMaterial(child.material);
+      }
+    });
+  });
+  // Trees
+  mapRefs.trees.meshes.forEach((m) => {
+    m.geometry.dispose();
+    disposeMaterial(m.material);
+  });
+}
+
 // 외곽벽 바깥에 배치될 빌딩 사양 (v28: 낮고 단정한 주택)
 interface BuildingSpec {
   x: number;

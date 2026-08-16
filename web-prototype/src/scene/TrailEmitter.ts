@@ -12,9 +12,11 @@ import { GAME, SPEED_TIERS, type SpeedTier } from '../config';
 
 // 리본 shape — 길이 1.2m, 폭 0.35m. PlaneGeometry는 XY 평면 → X는 길이, Y는 폭.
 // 2026-08-15 v2: 폭 0.5 → 0.35 — 자국이 너무 두꺼워서 부셔지던 보정
+// 2026-08-16: TRAIL_GEOMETRY를 모듈 레벨에서 인스턴스 레벨로 이동
+// - 이전: 모듈 상수 → 여러 TrailEmitter 인스턴스가 같은 geometry 공유
+// - 문제: dispose()에서 dispose하면 2번째 게임부터 자국 안 보임
 const TRAIL_LENGTH = 1.2;
 const TRAIL_WIDTH = 0.35;
-const TRAIL_GEOMETRY = new THREE.PlaneGeometry(TRAIL_LENGTH, TRAIL_WIDTH);
 
 interface ActiveTrail {
   mesh: THREE.Mesh;
@@ -37,6 +39,8 @@ export class TrailEmitter {
   private readonly tagger: THREE.Object3D;
   private readonly taggerSpeedTierRef: { current: SpeedTier };
   private readonly isTaggerFrozenRef: { current: boolean } | undefined;
+  // 2026-08-16: 인스턴스별 geometry (모듈 공유 시 dispose 후 다음 인스턴스 깨짐)
+  private readonly geometry: THREE.PlaneGeometry;
 
   private readonly active: ActiveTrail[] = [];
   private lastPosition = new THREE.Vector3();
@@ -49,6 +53,7 @@ export class TrailEmitter {
     this.tagger = opts.tagger;
     this.taggerSpeedTierRef = opts.taggerSpeedTierRef;
     this.isTaggerFrozenRef = opts.isTaggerFrozenRef;
+    this.geometry = new THREE.PlaneGeometry(TRAIL_LENGTH, TRAIL_WIDTH);
     this.lastPosition.copy(this.tagger.position);
   }
 
@@ -110,7 +115,7 @@ export class TrailEmitter {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    const mesh = new THREE.Mesh(TRAIL_GEOMETRY, material);
+    const mesh = new THREE.Mesh(this.geometry, material);
 
     // 위치: 바닥 살짝 위 (z-fighting 방지)
     mesh.position.set(position.x, 0.06, position.z);
@@ -142,7 +147,8 @@ export class TrailEmitter {
       t.material.dispose();
     }
     this.active.length = 0;
-    TRAIL_GEOMETRY.dispose();
+    // 2026-08-16: 인스턴스별 geometry dispose
+    this.geometry.dispose();
   }
 
   /** 현재 활성 자국 개수 (HUD용) */
