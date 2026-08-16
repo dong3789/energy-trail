@@ -16,7 +16,10 @@ interface DustParticle {
 }
 
 const POOL_SIZE = 200;
-const DUST_GEOMETRY = new THREE.PlaneGeometry(0.3, 0.3);
+// 2026-08-16: DUST_GEOMETRY를 모듈 레벨에서 인스턴스 레벨로 이동 (TrailEmitter와 동일 패턴)
+// - 이전: 모듈 상수 → 여러 DustSystem 인스턴스가 같은 geometry 공유
+// - 문제: dispose()에서 dispose하면 2번째 게임부터 먼지 안 보임
+// - 픽스: 인스턴스 멤버로 이동 (\`this.geometry\`)
 
 export interface DustSystemOptions {
   scene: THREE.Scene;
@@ -31,6 +34,8 @@ export class DustSystem {
   private readonly scene: THREE.Scene;
   private readonly mesh: THREE.InstancedMesh;
   private readonly material: THREE.MeshBasicMaterial;
+  // 2026-08-16: 인스턴스별 geometry
+  private readonly geometry: THREE.PlaneGeometry;
   private readonly particles: DustParticle[] = [];
   private readonly dummy = new THREE.Object3D();
   private readonly tmpColor = new THREE.Color();
@@ -60,7 +65,8 @@ export class DustSystem {
       side: THREE.DoubleSide,
     });
 
-    this.mesh = new THREE.InstancedMesh(DUST_GEOMETRY, this.material, POOL_SIZE);
+    this.geometry = new THREE.PlaneGeometry(0.3, 0.3);
+    this.mesh = new THREE.InstancedMesh(this.geometry, this.material, POOL_SIZE);
     // 초기에는 모두 scale 0 (안 보이게)
     this.dummy.scale.set(0, 0, 0);
     this.dummy.position.set(0, -100, 0);
@@ -203,6 +209,7 @@ export class DustSystem {
     this.scene.remove(this.mesh);
     this.mesh.dispose();
     this.material.dispose();
-    DUST_GEOMETRY.dispose();
+    // 2026-08-16: 인스턴스별 geometry dispose
+    this.geometry.dispose();
   }
 }

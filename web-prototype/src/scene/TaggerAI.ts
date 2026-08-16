@@ -89,8 +89,12 @@ export class TaggerAI {
     const next = this.tmpVec.copy(this.mesh.position).addScaledVector(this.heading, speed * dt);
 
     // 회전 — 2026-08-15 v2: target 추적이므로 즉시 회전 (slerp 제거) → 더 공격적
+    // 2026-08-16 BUG 픽스: atan2(hx, hz) → atan2(-hx, -hz)로 정정
+    // - 캐릭터 모델은 -Z가 정면. heading이 (0,-1) [north] 일 때 회전 0 (정면이 -Z)
+    // - 이전 atan2(hx, hz)는 heading이 (0,-1)일 때 π를 반환 → 등 돌림
+    // - PlayerController / RunnerAIStub과 동일 공식으로 통일
     if (this.heading.lengthSq() > 1e-4) {
-      const angle = Math.atan2(this.heading.x, this.heading.z);
+      const angle = Math.atan2(-this.heading.x, -this.heading.z);
       this.tmpQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
       this.mesh.quaternion.copy(this.tmpQuat);
     }

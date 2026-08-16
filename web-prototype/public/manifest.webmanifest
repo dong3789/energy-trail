@@ -1,0 +1,18 @@
+{
+  "name": "자국 — Energy Trail",
+  "short_name": "자국",
+  "description": "술래가 흘린 자국을 뒤집어쓰고, 출구로. 3D 카툰 술래잡기.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#a8e0ff",
+  "theme_color": "#a8e0ff",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

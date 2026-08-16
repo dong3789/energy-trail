@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 2026-08-16: 자국 파비콘 (SVG, 인라인 1KB) -->
+  <!-- 핑크 태거 — Fall Guys 카툰 -->
+  <rect width="32" height="32" rx="8" fill="#a8e0ff"/>
+  <ellipse cx="16" cy="20" rx="8" ry="7" fill="#ff5c8a" stroke="#2a1a4a" stroke-width="2"/>
+  <circle cx="16" cy="11" r="6" fill="#ff5c8a" stroke="#2a1a4a" stroke-width="2"/>
+  <circle cx="13.5" cy="10.5" r="1.2" fill="#fff"/>
+  <circle cx="18.5" cy="10.5" r="1.2" fill="#fff"/>
+  <circle cx="13.5" cy="10.5" r="0.6" fill="#2a1a4a"/>
+  <circle cx="18.5" cy="10.5" r="0.6" fill="#2a1a4a"/>
+  <path d="M 13 14 Q 16 16 19 14" stroke="#2a1a4a" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+</svg>
