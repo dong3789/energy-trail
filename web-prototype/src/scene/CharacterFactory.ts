@@ -13,10 +13,7 @@ export interface CharacterFeaturesOptions {
   hasEyes?: boolean;
 }
 
-export function addCharacterFeatures(
-  body: THREE.Mesh,
-  opts: CharacterFeaturesOptions,
-): void {
+export function addCharacterFeatures(body: THREE.Mesh, opts: CharacterFeaturesOptions): void {
   const scale = opts.isTagger ? GAME.taggerScale : 1;
   const hasEyes = opts.hasEyes ?? true;
 
@@ -28,7 +25,7 @@ export function addCharacterFeatures(
     color: headColor,
   });
   const head = new THREE.Mesh(headGeom, headMat);
-  const capsuleTop = (PLAYER.height / 2);
+  const capsuleTop = PLAYER.height / 2;
   // 머리 위치를 몸통 위쪽에 부착 (캡슐 안에 살짝 박힘)
   head.position.set(0, capsuleTop - headRadius * 0.3, 0);
   head.castShadow = true;
@@ -46,17 +43,11 @@ export function addCharacterFeatures(
     const eyeZ = -headRadius * 0.92;
     for (const side of [-1, 1]) {
       // 흰자
-      const eyeWhite = new THREE.Mesh(
-        new THREE.SphereGeometry(eyeRadius, 12, 8),
-        eyeWhiteMat,
-      );
+      const eyeWhite = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius, 12, 8), eyeWhiteMat);
       eyeWhite.position.set(side * eyeXOffset, eyeY, eyeZ);
       eyeGroup.add(eyeWhite);
       // 검은 동공
-      const pupil = new THREE.Mesh(
-        new THREE.SphereGeometry(eyeRadius * 0.5, 10, 6),
-        eyePupilMat,
-      );
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius * 0.5, 10, 6), eyePupilMat);
       pupil.position.set(side * eyeXOffset, eyeY - eyeRadius * 0.05, eyeZ - eyeRadius * 0.7);
       eyeGroup.add(pupil);
     }

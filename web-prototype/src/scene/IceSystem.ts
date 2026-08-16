@@ -73,8 +73,16 @@ export class IceSystem {
   }
 
   /** UI 표시용 */
-  isActive(): boolean { return this.active; }
-  getRemaining(): number { return this.remaining; }
-  getCooldown(): number { return this.cooldown; }
-  isReady(): boolean { return !this.active && this.cooldown <= 0; }
+  isActive(): boolean {
+    return this.active;
+  }
+  getRemaining(): number {
+    return this.remaining;
+  }
+  getCooldown(): number {
+    return this.cooldown;
+  }
+  isReady(): boolean {
+    return !this.active && this.cooldown <= 0;
+  }
 }

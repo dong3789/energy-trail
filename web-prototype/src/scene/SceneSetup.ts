@@ -31,12 +31,20 @@ export function createScene(container: HTMLElement, mapDef: MapDef): SceneContex
 
   // === Camera (3인칭 사선) ===
   const aspect = container.clientWidth / Math.max(1, container.clientHeight);
-  const camera = new THREE.PerspectiveCamera(SCENE.cameraFov, aspect, SCENE.cameraNear, SCENE.cameraFar);
+  const camera = new THREE.PerspectiveCamera(
+    SCENE.cameraFov,
+    aspect,
+    SCENE.cameraNear,
+    SCENE.cameraFar,
+  );
   camera.position.set(SCENE.cameraPosition.x, SCENE.cameraPosition.y, SCENE.cameraPosition.z);
   camera.lookAt(SCENE.cameraLookAt.x, SCENE.cameraLookAt.y, SCENE.cameraLookAt.z);
 
   // === Renderer (포스트프로세싱 없이 직접) ===
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: 'high-performance',
+  });
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
@@ -144,12 +152,12 @@ function makeGradientSky(skyColor: number): THREE.CanvasTexture {
   const b = skyColor & 0xff;
   // 위에서 아래로: skyColor → 더 밝은 톤 (하늘 빛)
   const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  grad.addColorStop(0, `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`);
+  grad.addColorStop(0, `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`);
   // 아래쪽은 흰색에 가까이 (안개/지평선)
   const r2 = Math.min(255, r + 40);
   const g2 = Math.min(255, g + 40);
   const b2 = Math.min(255, b + 30);
-  grad.addColorStop(1, `#${[r2, g2, b2].map(v => v.toString(16).padStart(2, '0')).join('')}`);
+  grad.addColorStop(1, `#${[r2, g2, b2].map((v) => v.toString(16).padStart(2, '0')).join('')}`);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const tex = new THREE.CanvasTexture(canvas);

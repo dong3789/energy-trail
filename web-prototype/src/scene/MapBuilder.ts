@@ -30,9 +30,9 @@ interface BuildingSpec {
   depth: number;
 }
 
-const BUILDING_OFFSET = 3.5;          // 외곽벽에서 바깥으로
-const BUILDING_BASE_HEIGHT = 4;       // v28: 12 → 4 (낮은 주택)
-const BUILDING_HEIGHT_VAR = 2;        // ±2m
+const BUILDING_OFFSET = 3.5; // 외곽벽에서 바깥으로
+const BUILDING_BASE_HEIGHT = 4; // v28: 12 → 4 (낮은 주택)
+const BUILDING_HEIGHT_VAR = 2; // ±2m
 
 export function buildMap(scene: THREE.Scene, mapDef: MapDef): MapRefs {
   // === 바닥 (잔디) ===
@@ -65,10 +65,7 @@ export function buildMap(scene: THREE.Scene, mapDef: MapDef): MapRefs {
 
   const walls: THREE.Mesh[] = [];
   for (const spec of wallSpecs) {
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(spec.w, spec.h, spec.d),
-      wallMaterial,
-    );
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(spec.w, spec.h, spec.d), wallMaterial);
     mesh.position.set(spec.pos[0], spec.pos[1], spec.pos[2]);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -140,7 +137,8 @@ function buildBuildings(scene: THREE.Scene, mapDef: MapDef): THREE.Mesh[] {
   for (let i = -2; i <= 2; i++) {
     const x = i * 7;
     specs.push({
-      x, z: -halfD - BUILDING_OFFSET,
+      x,
+      z: -halfD - BUILDING_OFFSET,
       width: 4 + Math.random() * 1.5,
       height: BUILDING_BASE_HEIGHT + Math.random() * BUILDING_HEIGHT_VAR,
       depth: 4 + Math.random() * 1,
@@ -149,7 +147,8 @@ function buildBuildings(scene: THREE.Scene, mapDef: MapDef): THREE.Mesh[] {
   for (let i = -2; i <= 2; i++) {
     const x = i * 7;
     specs.push({
-      x, z: halfD + BUILDING_OFFSET,
+      x,
+      z: halfD + BUILDING_OFFSET,
       width: 4 + Math.random() * 1.5,
       height: BUILDING_BASE_HEIGHT + Math.random() * BUILDING_HEIGHT_VAR,
       depth: 4 + Math.random() * 1,
@@ -158,7 +157,8 @@ function buildBuildings(scene: THREE.Scene, mapDef: MapDef): THREE.Mesh[] {
   for (let i = -2; i <= 2; i++) {
     const z = i * 7;
     specs.push({
-      x: halfW + BUILDING_OFFSET, z,
+      x: halfW + BUILDING_OFFSET,
+      z,
       width: 4 + Math.random() * 1,
       height: BUILDING_BASE_HEIGHT + Math.random() * BUILDING_HEIGHT_VAR,
       depth: 4 + Math.random() * 1.5,
@@ -167,7 +167,8 @@ function buildBuildings(scene: THREE.Scene, mapDef: MapDef): THREE.Mesh[] {
   for (let i = -2; i <= 2; i++) {
     const z = i * 7;
     specs.push({
-      x: -halfW - BUILDING_OFFSET, z,
+      x: -halfW - BUILDING_OFFSET,
+      z,
       width: 4 + Math.random() * 1,
       height: BUILDING_BASE_HEIGHT + Math.random() * BUILDING_HEIGHT_VAR,
       depth: 4 + Math.random() * 1.5,
@@ -226,7 +227,7 @@ function addWindowsToBuilding(
   for (let i = 0; i < count; i++) {
     const win = new THREE.Mesh(new THREE.PlaneGeometry(ww, wh), windowMat);
     const yLocal = -spec.height / 2 + spec.height * 0.5;
-    const xLocal = (i - (count - 1) / 2) * (spec.width * 0.6 / Math.max(1, count - 1));
+    const xLocal = (i - (count - 1) / 2) * ((spec.width * 0.6) / Math.max(1, count - 1));
     const zLocal = spec.depth / 2 + 0.02;
     win.position.set(xLocal, yLocal, zLocal);
     building.add(win);
@@ -254,10 +255,7 @@ function buildTrees(scene: THREE.Scene, mapDef: MapDef): TreeRefs {
   for (const pos of positions) {
     // 기둥
     const trunkH = 0.8 * pos.scale;
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.15, trunkH, 6),
-      trunkMat,
-    );
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, trunkH, 6), trunkMat);
     trunk.position.set(pos.x, trunkH / 2, pos.z);
     trunk.castShadow = true;
     scene.add(trunk);
@@ -265,10 +263,7 @@ function buildTrees(scene: THREE.Scene, mapDef: MapDef): TreeRefs {
 
     // 잎 (Cone)
     const leavesH = 1.6 * pos.scale;
-    const leaves = new THREE.Mesh(
-      new THREE.ConeGeometry(0.7 * pos.scale, leavesH, 6),
-      leavesMat,
-    );
+    const leaves = new THREE.Mesh(new THREE.ConeGeometry(0.7 * pos.scale, leavesH, 6), leavesMat);
     leaves.position.set(pos.x, trunkH + leavesH / 2, pos.z);
     leaves.castShadow = true;
     scene.add(leaves);

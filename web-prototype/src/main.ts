@@ -1,6 +1,17 @@
 import './style.css';
 import * as THREE from 'three';
-import { SCENE, MAP, PLAYER, OBSTACLES_BY_MAP, GAME, SPEED_TIERS, MAPS, type MapId, type MapDef, type SpeedTier } from './config';
+import {
+  SCENE,
+  MAP,
+  PLAYER,
+  OBSTACLES_BY_MAP,
+  GAME,
+  SPEED_TIERS,
+  MAPS,
+  type MapId,
+  type MapDef,
+  type SpeedTier,
+} from './config';
 import { createScene, startRenderLoop, type SceneContext } from './scene/SceneSetup';
 import { buildMap, buildExitPoint } from './scene/MapBuilder';
 import { PlayerController } from './scene/PlayerController';
@@ -180,7 +191,12 @@ if (!app) throw new Error('앱 컨테이너를 찾을 수 없습니다.');
 const root = app;
 
 let screen: Screen = 'intro';
-const profile: Profile = { nickname: '', characterId: 'runner-cyan', role: 'runner', mapId: 'park' };
+const profile: Profile = {
+  nickname: '',
+  characterId: 'runner-cyan',
+  role: 'runner',
+  mapId: 'park',
+};
 let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
 const game: GameState = {
@@ -495,7 +511,10 @@ function renderRoom(): void {
       <div class="room-code-block">
         <span class="room-code-label">ROOM CODE</span>
         <div class="room-code-digits">
-          ${(isCreate ? roomCode : '----').split('').map((c) => `<span class="room-code-digit">${c}</span>`).join('')}
+          ${(isCreate ? roomCode : '----')
+            .split('')
+            .map((c) => `<span class="room-code-digit">${c}</span>`)
+            .join('')}
         </div>
         <span class="room-code-status">${isCreate ? '대기 중' : '코드 입력 대기'}</span>
       </div>
@@ -510,7 +529,7 @@ function renderRoom(): void {
     </div>
     <div class="room-players">
       <div class="room-player room-player-self">
-        <span class="room-player-dot" id="room-self-dot" style="background:${characters.find(c => c.id === profile.characterId)?.color ?? '#00e5ff'}"></span>
+        <span class="room-player-dot" id="room-self-dot" style="background:${characters.find((c) => c.id === profile.characterId)?.color ?? '#00e5ff'}"></span>
         <span class="room-player-name">${profile.nickname}</span>
         <span class="room-player-status ready" id="room-self-status">준비 전</span>
       </div>
@@ -545,7 +564,9 @@ function renderRoom(): void {
       `;
       card.addEventListener('click', () => {
         profile.characterId = character.id;
-        characterGrid.querySelectorAll('.room-character-card').forEach((c) => c.classList.remove('selected'));
+        characterGrid
+          .querySelectorAll('.room-character-card')
+          .forEach((c) => c.classList.remove('selected'));
         card.classList.add('selected');
         // 플레이어 리스트의 닷도 즉시 반영
         const selfDot = content.querySelector<HTMLElement>('#room-self-dot');
@@ -563,7 +584,10 @@ function renderRoom(): void {
       card.className = `room-map-card ${profile.mapId === id ? 'selected' : ''}`;
       card.style.setProperty('--map-color-a', `#${map.skyColor.toString(16).padStart(6, '0')}`);
       card.style.setProperty('--map-color-b', `#${map.groundColor.toString(16).padStart(6, '0')}`);
-      card.style.setProperty('--map-accent', `#${map.buildingColorA.toString(16).padStart(6, '0')}`);
+      card.style.setProperty(
+        '--map-accent',
+        `#${map.buildingColorA.toString(16).padStart(6, '0')}`,
+      );
       card.innerHTML = `
         <div class="room-map-preview">
           <div class="room-map-sky"></div>
@@ -624,14 +648,22 @@ function renderGame(): void {
   canvasHost.setAttribute('aria-label', '게임 화면 (WASD 이동, 1/2/3 속도)');
   wrap.appendChild(canvasHost);
   // 캔버스가 풀스크린 z-index로 위에 있을 때 키 포커스 잃지 않게 즉시 focus
-  setTimeout(() => { try { canvasHost.focus({ preventScroll: true }); } catch { canvasHost.focus(); } }, 0);
+  setTimeout(() => {
+    try {
+      canvasHost.focus({ preventScroll: true });
+    } catch {
+      canvasHost.focus();
+    }
+  }, 0);
 
   // v6: 캔버스 호스트에 keydown 리스너 (이전엔 stopPropagation 했는데 window 핸들러 차단 버그)
   // - PlayerController는 inputTarget=window에 등록됨 → 캔버스에서 stopPropagation 하면 window까지 안 가서 키 안 먹힘
   // - 캔버스 풀스크린이라서 stopPropagation 필요 없음 (button은 Space/Enter만 처리)
   // - 비워둠 (이전 코드는 제거)
-   
-  canvasHost.addEventListener('keydown', () => { /* no-op (window의 PlayerController가 받음) */ });
+
+  canvasHost.addEventListener('keydown', () => {
+    /* no-op (window의 PlayerController가 받음) */
+  });
 
   // ============================================================
   // 2026-08-15: 카메라 자유 회전/줌 (3인칭 표준)
@@ -641,8 +673,8 @@ function renderGame(): void {
   // - 카메라 회전/줌은 유지 (되돌아가지 않음)
   // ============================================================
   const camState = {
-    yaw: 0,           // 실제 적용값 (lerp으로 target에서 따라옴)
-    yawTarget: 0,     // 2026-08-15: 마우스 드래그 목표값 — smoothing의 대상
+    yaw: 0, // 실제 적용값 (lerp으로 target에서 따라옴)
+    yawTarget: 0, // 2026-08-15: 마우스 드래그 목표값 — smoothing의 대상
     pitch: 0.3,
     pitchTarget: 0.3, // 마찬가지
     distance: 7.0,
@@ -750,7 +782,7 @@ function renderGame(): void {
 
   // 2026-08-15 v3: Shift = 대시 (0.3s 짧은 돌진)
   const dashHandler = (e: KeyboardEvent): void => {
-    if (e.repeat || e.code !== 'ShiftLeft' && e.code !== 'ShiftRight') return;
+    if (e.repeat || (e.code !== 'ShiftLeft' && e.code !== 'ShiftRight')) return;
     if (game.out || roundState !== 'playing') return;
     if (player.tryDash()) {
       triggerShake(0.15);
@@ -775,7 +807,11 @@ function renderGame(): void {
         const modeEl = document.querySelector('.game-debug-mode');
         if (modeEl) modeEl.textContent = '카메라: 자유 (V)';
       }
-      try { canvasHost.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      try {
+        canvasHost.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
       e.preventDefault();
     }
   });
@@ -805,14 +841,18 @@ function renderGame(): void {
   canvasHost.addEventListener('pointercancel', endCamDrag);
 
   // 휠 줌 (preventDefault로 페이지 스크롤 차단)
-  canvasHost.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const dir = e.deltaY > 0 ? 1 : -1;
-    camState.distance = Math.max(
-      CAM_LIMITS.distanceMin,
-      Math.min(CAM_LIMITS.distanceMax, camState.distance + dir * CAM_LIMITS.distanceStep),
-    );
-  }, { passive: false });
+  canvasHost.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const dir = e.deltaY > 0 ? 1 : -1;
+      camState.distance = Math.max(
+        CAM_LIMITS.distanceMin,
+        Math.min(CAM_LIMITS.distanceMax, camState.distance + dir * CAM_LIMITS.distanceStep),
+      );
+    },
+    { passive: false },
+  );
 
   // v6: 버튼 클릭이 캔버스 포커스를 빼앗지 않도록 mousedown 차단 + 포커스 복원
   // 사용자가 UI 외 영역 클릭 시 다시 캔버스로 포커스
@@ -820,7 +860,11 @@ function renderGame(): void {
     // UI 버튼 클릭은 막지 않음 (정상 클릭 동작)
     const target = e.target as HTMLElement;
     if (target.closest('button') || target.closest('input')) return;
-    try { canvasHost.focus({ preventScroll: true }); } catch { canvasHost.focus(); }
+    try {
+      canvasHost.focus({ preventScroll: true });
+    } catch {
+      canvasHost.focus();
+    }
   });
   // v6: mousedown 시 버튼이 focus를 받지 않게 방지 (pointerdown 보완)
   wrap.addEventListener('mousedown', (e) => {
@@ -848,9 +892,11 @@ function renderGame(): void {
     <div class="game-debug-row">상대: AI (${profile.role === 'tagger' ? '도망자' : '술래'})</div>
     <div class="game-debug-row">자국: ${GAME.trailLifetime}초 후 소멸, 최대 ${GAME.trailMaxCount}개</div>
     <div class="game-debug-row muted">${camHint}</div>
-    <div class="game-debug-row muted">${profile.role === 'tagger'
-      ? 'Space/B 부스터 · F 홀딩: 조준 → 떼면 발사 · 클릭: 즉시 사격 · V: 카메라 모드'
-      : 'E 흡수 · F 얼림 · V: 카메라 모드'}</div>
+    <div class="game-debug-row muted">${
+      profile.role === 'tagger'
+        ? 'Space/B 부스터 · F 홀딩: 조준 → 떼면 발사 · 클릭: 즉시 사격 · V: 카메라 모드'
+        : 'E 흡수 · F 얼림 · V: 카메라 모드'
+    }</div>
     <div class="game-debug-row muted game-debug-mode">카메라: 추적 (V)</div>
   `;
   debug.style.display = 'none'; // 기본 숨김
@@ -933,9 +979,11 @@ function renderGame(): void {
         <label class="pause-row">
           <span>조작법</span>
           <span class="pause-hint muted">
-            ${profile.role === 'tagger'
-              ? 'Space/B 부스터 · F 사격 · Shift 대시 · V 카메라'
-              : 'E 흡수 · F 얼림 · Shift 대시 · V 카메라'}
+            ${
+              profile.role === 'tagger'
+                ? 'Space/B 부스터 · F 사격 · Shift 대시 · V 카메라'
+                : 'E 흡수 · F 얼림 · Shift 대시 · V 카메라'
+            }
           </span>
         </label>
       </div>
@@ -958,8 +1006,14 @@ function renderGame(): void {
   }
 
   pauseContinueBtn?.addEventListener('click', hidePauseMenu);
-  pauseRestartBtn?.addEventListener('click', () => { hidePauseMenu(); setScreen('room'); });
-  pauseLobbyBtn?.addEventListener('click', () => { hidePauseMenu(); setScreen('lobby'); });
+  pauseRestartBtn?.addEventListener('click', () => {
+    hidePauseMenu();
+    setScreen('room');
+  });
+  pauseLobbyBtn?.addEventListener('click', () => {
+    hidePauseMenu();
+    setScreen('lobby');
+  });
   pauseSoundChk?.addEventListener('change', () => {
     if (sound) sound.setEnabled(pauseSoundChk.checked);
     if (soundToggle) {
@@ -1136,8 +1190,8 @@ function renderGame(): void {
   // ============================================================
   type RoundState = 'countdown' | 'playing' | 'ended';
   let roundState: RoundState = 'countdown';
-  let roundTime: number = GAME.roundSeconds;     // 남은 시간 (초)
-  let escapeHoldTime = 0;               // 출구 위 유지 시간
+  let roundTime: number = GAME.roundSeconds; // 남은 시간 (초)
+  let escapeHoldTime = 0; // 출구 위 유지 시간
   const roundStats = { absorbed: 0, outCount: 0, iceUsed: 0, boostUsed: 0, startedAt: 0 };
 
   // 카운트다운 오버레이 (3, 2, 1, 시작!)
@@ -1243,9 +1297,7 @@ function renderGame(): void {
     }
     // v34: sub 텍스트에 이모지/친근한 prefix 추가
     if (resultSubEl) {
-      const subText = userWon
-        ? `🎉 ${reason}`
-        : `💥 ${reason}`;
+      const subText = userWon ? `🎉 ${reason}` : `💥 ${reason}`;
       resultSubEl.textContent = subText;
     }
     if (resultTimeEl) {
@@ -1294,7 +1346,12 @@ function renderGame(): void {
       metalness: 0.3,
     });
     selfMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(PLAYER.radius * GAME.taggerScale, (PLAYER.height - PLAYER.radius * 2) * GAME.taggerScale, 4, 8),
+      new THREE.CapsuleGeometry(
+        PLAYER.radius * GAME.taggerScale,
+        (PLAYER.height - PLAYER.radius * 2) * GAME.taggerScale,
+        4,
+        8,
+      ),
       selfMaterial,
     );
     // v5: 장애물 (-4,6) 바깥으로 시작 (이전 (-5,5)는 장애물 안에 갇혀 못 나옴)
@@ -1366,7 +1423,8 @@ function renderGame(): void {
     new THREE.CapsuleGeometry(
       isTagger ? PLAYER.radius : PLAYER.radius * GAME.taggerScale,
       (PLAYER.height - PLAYER.radius * 2) * (isTagger ? 1 : GAME.taggerScale),
-      4, 8,
+      4,
+      8,
     ),
     aiMaterial,
   );
@@ -1475,7 +1533,7 @@ function renderGame(): void {
   const player = new PlayerController({
     scene: ctx.scene,
     mesh: selfMesh,
-    obstacles: mapObstacles,           // 2026-08-15: 맵별 장애물
+    obstacles: mapObstacles, // 2026-08-15: 맵별 장애물
     mapHalfWidth: mapHalfW,
     mapHalfDepth: mapHalfD,
     inputTarget: window, // v6: window (포커스 무관, 캔버스/버튼 포커스 무관하게 안정)
@@ -1496,19 +1554,21 @@ function renderGame(): void {
   const taggerMeshForBoost = !isTagger ? aiMesh : selfMesh;
 
   // v5: 부스터 시스템 — 술래만 적용
-  const boost = isTagger ? new BoostSystem({
-    onVisualChange: (params) => {
-      // scale 갱신 (정지 중 더 작게, 피로도 비례 shrink)
-      taggerMeshForBoost.scale.setScalar(params.scale);
-    },
-  }) : null;
+  const boost = isTagger
+    ? new BoostSystem({
+        onVisualChange: (params) => {
+          // scale 갱신 (정지 중 더 작게, 피로도 비례 shrink)
+          taggerMeshForBoost.scale.setScalar(params.scale);
+        },
+      })
+    : null;
 
   let runnerAI: RunnerAIStub | null = null;
   if (!isTagger) {
     // 자기가 도망자: AI 술래가 추격
     taggerAI = new TaggerAI({
       mesh: aiMesh,
-      obstacles: mapObstacles,           // 2026-08-15: 맵별 장애물
+      obstacles: mapObstacles, // 2026-08-15: 맵별 장애물
       mapHalfWidth: mapHalfW,
       mapHalfDepth: mapHalfD,
       target: selfMesh, // 자기를 추적
@@ -1519,7 +1579,7 @@ function renderGame(): void {
     // 자기가 술래: AI 도망자는 단순 도주 (랜덤 + 자기와 거리 유지)
     runnerAI = new RunnerAIStub({
       mesh: aiMesh,
-      obstacles: mapObstacles,           // 2026-08-15: 맵별 장애물
+      obstacles: mapObstacles, // 2026-08-15: 맵별 장애물
       mapHalfWidth: mapHalfW,
       mapHalfDepth: mapHalfD,
       threat: selfMesh,
@@ -1588,11 +1648,25 @@ function renderGame(): void {
   // 2026-08-09 v2: 머리 위에 캔버스 라벨 스프라이트
   if (PLAYER.showPlayerLabels) {
     if (isTagger) {
-      addPlayerLabel(ctx.scene, selfMesh.position, selfLabel, PLAYER.taggerAccent, PLAYER.labelOffsetY, true);
+      addPlayerLabel(
+        ctx.scene,
+        selfMesh.position,
+        selfLabel,
+        PLAYER.taggerAccent,
+        PLAYER.labelOffsetY,
+        true,
+      );
       addPlayerLabel(ctx.scene, aiMesh.position, aiLabel, aiColor, PLAYER.labelOffsetY, false);
     } else {
       addPlayerLabel(ctx.scene, selfMesh.position, selfLabel, selfColor, PLAYER.labelOffsetY, true);
-      addPlayerLabel(ctx.scene, aiMesh.position, aiLabel, PLAYER.taggerAccent, PLAYER.labelOffsetY, false);
+      addPlayerLabel(
+        ctx.scene,
+        aiMesh.position,
+        aiLabel,
+        PLAYER.taggerAccent,
+        PLAYER.labelOffsetY,
+        false,
+      );
     }
   }
 
@@ -1714,7 +1788,12 @@ function renderGame(): void {
     if (roundState !== 'playing' || game.out) return;
     // UI 버튼 클릭은 무시
     const target = e.target as HTMLElement;
-    if (target.closest('button') || target.closest('.joystick-base') || target.closest('.speed-bar')) return;
+    if (
+      target.closest('button') ||
+      target.closest('.joystick-base') ||
+      target.closest('.speed-bar')
+    )
+      return;
     fireShot();
   });
 
@@ -1864,7 +1943,9 @@ function renderGame(): void {
 
   // 2026-08-15: 카메라 셰이크 (충격 이벤트 시 미세 진동)
   let cameraShake = 0; // 0~1, 감쇠됨
-  const triggerShake = (amount: number): void => { cameraShake = Math.min(1, cameraShake + amount); };
+  const triggerShake = (amount: number): void => {
+    cameraShake = Math.min(1, cameraShake + amount);
+  };
 
   // 2026-08-15: OUT 슬로모 + 흑백 (드라마틱 연출)
   let slowmoTime = 0; // 남은 슬로모 시간 (초)
@@ -1970,9 +2051,8 @@ function renderGame(): void {
       // 2026-08-15: 인트로 시네마틱 카메라 (고공 → 추적 위치)
       const introT = Math.min(1, (performance.now() - gameStartedAt) / (introDuration * 1000));
       // Easing: cubic ease-in-out
-      const eased = introT < 0.5
-        ? 4 * introT * introT * introT
-        : 1 - Math.pow(-2 * introT + 2, 3) / 2;
+      const eased =
+        introT < 0.5 ? 4 * introT * introT * introT : 1 - Math.pow(-2 * introT + 2, 3) / 2;
       // 카메라 위치 lerp (introStartPos → 정상 follow 위치)
       // 정상 follow 위치 계산 (임시로 간단히)
       const desiredFollowPos = new THREE.Vector3();
@@ -2050,7 +2130,11 @@ function renderGame(): void {
             const dist = Math.sqrt(dx * dx + dz * dz);
             if (dist <= GAME.shotRange) {
               const isAimingNow = isAiming;
-              showActionPrompt(isAimingNow ? '조준 중 — 떼면 발사' : '포박줄 사격', isAimingNow ? 'F' : 'F·클릭', '#ff3a5c');
+              showActionPrompt(
+                isAimingNow ? '조준 중 — 떼면 발사' : '포박줄 사격',
+                isAimingNow ? 'F' : 'F·클릭',
+                '#ff3a5c',
+              );
             }
           }
         }
@@ -2142,7 +2226,7 @@ function renderGame(): void {
         const minDist = PLAYER.radius * 2 + 0.15; // 캡슐 반지름 합 + 약간의 여유
         if (distSq < minDist * minDist && distSq > 1e-6) {
           const dist = Math.sqrt(distSq);
-          const overlap = (minDist - dist);
+          const overlap = minDist - dist;
           const nx = dx / dist;
           const nz = dz / dist;
           // 양쪽 동일하게 밀어냄. 단 frozen/얼려진 쪽은 안 움직임.
@@ -2231,7 +2315,9 @@ function renderGame(): void {
     // 2026-08-15 v4: 라운드 타이머 HUD — 큰 글씨 + 색상 그라데이션 (best practice: 시각적 계층)
     if (roundTimerEl) {
       const mm = Math.floor(roundTime / 60);
-      const ss = Math.floor(roundTime % 60).toString().padStart(2, '0');
+      const ss = Math.floor(roundTime % 60)
+        .toString()
+        .padStart(2, '0');
       const timeStr = `${mm}:${ss}`;
       roundTimerEl.textContent = timeStr;
       // 색상: green (safe) → yellow (warning) → red (critical) → flashing
@@ -2332,8 +2418,9 @@ function renderGame(): void {
       const inp = player.getDebugInput();
       const px = selfMesh.position.x;
       const pz = selfMesh.position.z;
-      const dirArrow = (inp.forward > 0 ? '↑' : inp.forward < 0 ? '↓' : '·') +
-                       (inp.right > 0 ? '→' : inp.right < 0 ? '←' : '·');
+      const dirArrow =
+        (inp.forward > 0 ? '↑' : inp.forward < 0 ? '↓' : '·') +
+        (inp.right > 0 ? '→' : inp.right < 0 ? '←' : '·');
       const frozenTag = player.isFrozen() ? ' [얼림]' : '';
       debugStatus.textContent = `(${px.toFixed(1)}, ${pz.toFixed(1)}) 입력 ${dirArrow}${frozenTag}`;
     }
@@ -2344,12 +2431,14 @@ function renderGame(): void {
         iceBtn.classList.add('frozen');
         iceBtn.classList.remove('ready', 'cooldown');
         iceBtn.disabled = true;
-        iceBtn.querySelector('.ice-btn-label')!.textContent = `얼림 ${ice.getRemaining().toFixed(1)}s`;
+        iceBtn.querySelector('.ice-btn-label')!.textContent =
+          `얼림 ${ice.getRemaining().toFixed(1)}s`;
       } else if (ice.getCooldown() > 0) {
         iceBtn.classList.remove('frozen', 'ready');
         iceBtn.classList.add('cooldown');
         iceBtn.disabled = true;
-        iceBtn.querySelector('.ice-btn-label')!.textContent = `쿨다운 ${ice.getCooldown().toFixed(1)}s`;
+        iceBtn.querySelector('.ice-btn-label')!.textContent =
+          `쿨다운 ${ice.getCooldown().toFixed(1)}s`;
       } else {
         iceBtn.classList.remove('frozen', 'cooldown');
         iceBtn.classList.add('ready');
@@ -2527,7 +2616,7 @@ function renderGame(): void {
       const q = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
       cameraFacing.applyQuaternion(q);
     }
-    charForward.copy(cameraFacing);  // 카메라가 보는 방향 = W
+    charForward.copy(cameraFacing); // 카메라가 보는 방향 = W
     charRight.crossVectors(cameraFacing, worldUp).normalize();
     player.setMoveBasis(charForward, charRight);
 
@@ -2661,14 +2750,30 @@ function render(): void {
   root.replaceChildren();
   root.dataset.screen = screen;
   switch (screen) {
-    case 'intro': renderIntro(); break;
-    case 'login': renderLogin(); break;
-    case 'character': renderCharacter(); break;
-    case 'role': renderRole(); break;
-    case 'map-select': renderMapSelect(); break;
-    case 'lobby': renderLobby(); break;
-    case 'room': renderRoom(); break;
-    case 'game': renderGame(); break;
+    case 'intro':
+      renderIntro();
+      break;
+    case 'login':
+      renderLogin();
+      break;
+    case 'character':
+      renderCharacter();
+      break;
+    case 'role':
+      renderRole();
+      break;
+    case 'map-select':
+      renderMapSelect();
+      break;
+    case 'lobby':
+      renderLobby();
+      break;
+    case 'room':
+      renderRoom();
+      break;
+    case 'game':
+      renderGame();
+      break;
   }
 }
 

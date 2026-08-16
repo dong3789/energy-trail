@@ -9,20 +9,20 @@ import { GAME } from '../config';
 export type AbsorbEvent = 'idle' | 'progress' | 'complete' | 'cancel' | 'interrupted';
 
 export interface AbsorbSystemCallbacks {
-  onStart?: () => void;        // 흡수 시작
+  onStart?: () => void; // 흡수 시작
   onProgress?: (progress01: number) => void; // 0~1 매 프레임
   onComplete?: (strength: number) => void; // 1초 완료, 흡수한 자국 강도
-  onCancel?: () => void;       // 자국에서 벗어남 / 얼림 / OUT
+  onCancel?: () => void; // 자국에서 벗어남 / 얼림 / OUT
   onBoostStart?: (durationSec: number) => void; // 가속 시작
-  onBoostEnd?: () => void;     // 가속 종료
+  onBoostEnd?: () => void; // 가속 종료
 }
 
 export class AbsorbSystem {
   private absorbing = false;
-  private progress = 0;          // 0~1 (1초 기준)
-  private cooldown = 0;          // 남은 쿨다운 (초)
-  private boostRemaining = 0;    // 가속 남은 시간 (초)
-  private invulnerable = false;  // 1회 무적
+  private progress = 0; // 0~1 (1초 기준)
+  private cooldown = 0; // 남은 쿨다운 (초)
+  private boostRemaining = 0; // 가속 남은 시간 (초)
+  private invulnerable = false; // 1회 무적
   private strengthConsumed = 1.0; // 마지막 흡수 강도 (0~1)
   private lastTrailWorldPos: { x: number; z: number } | null = null;
 
@@ -100,20 +100,34 @@ export class AbsorbSystem {
     this.lastTrailWorldPos = { x, z };
   }
 
-  getLastTrailPosition(): { x: number; z: number } | null { return this.lastTrailWorldPos; }
+  getLastTrailPosition(): { x: number; z: number } | null {
+    return this.lastTrailWorldPos;
+  }
 
   /** 흡수할 자국 강도 (자국 색 농도 → 가속 배율 미세 조정) */
-  setStrengthConsumed(s: number): void { this.strengthConsumed = Math.max(0.4, Math.min(1.0, s)); }
+  setStrengthConsumed(s: number): void {
+    this.strengthConsumed = Math.max(0.4, Math.min(1.0, s));
+  }
 
   // === Getters ===
-  isAbsorbing(): boolean { return this.absorbing; }
-  getProgress(): number { return this.progress; }
-  isInvulnerable(): boolean { return this.invulnerable; }
-  getBoostRemaining(): number { return this.boostRemaining; }
+  isAbsorbing(): boolean {
+    return this.absorbing;
+  }
+  getProgress(): number {
+    return this.progress;
+  }
+  isInvulnerable(): boolean {
+    return this.invulnerable;
+  }
+  getBoostRemaining(): number {
+    return this.boostRemaining;
+  }
   getBoostSpeedMultiplier(): number {
     return this.boostRemaining > 0 ? GAME.absorbedSpeedMultiplier * this.strengthConsumed : 1.0;
   }
-  getCooldown(): number { return this.cooldown; }
+  getCooldown(): number {
+    return this.cooldown;
+  }
 
   /** 외부에서 무적을 소비 (충돌 1회 무시) — true면 무적 소진됨 */
   consumeInvulnerability(): boolean {

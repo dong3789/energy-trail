@@ -37,8 +37,14 @@ export class SoundManager {
       return;
     }
     try {
-      const AudioCtor = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
-        || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      const AudioCtor =
+        (
+          window as unknown as {
+            AudioContext?: typeof AudioContext;
+            webkitAudioContext?: typeof AudioContext;
+          }
+        ).AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!AudioCtor) return;
       this.ctx = new AudioCtor();
     } catch {
@@ -64,7 +70,9 @@ export class SoundManager {
     }
   }
 
-  isEnabled(): boolean { return this.enabled; }
+  isEnabled(): boolean {
+    return this.enabled;
+  }
 
   // ===== SFX =====
 
@@ -96,7 +104,9 @@ export class SoundManager {
     osc.stop(now + 0.1);
   }
 
-  setFootstepInterval(seconds: number): void { this.footstepInterval = seconds; }
+  setFootstepInterval(seconds: number): void {
+    this.footstepInterval = seconds;
+  }
 
   /** 부스터 — whoosh (상승 톤 + 노이즈) */
   playBoost(): void {
@@ -320,7 +330,9 @@ export class SoundManager {
     this.musicEnabled = false;
   }
 
-  isMusicEnabled(): boolean { return this.musicEnabled; }
+  isMusicEnabled(): boolean {
+    return this.musicEnabled;
+  }
 
   // ===== 내부: 노이즈 버스트 (low/highpass filter) =====
 

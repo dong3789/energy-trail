@@ -10,9 +10,9 @@ interface DustParticle {
   active: boolean;
   position: THREE.Vector3;
   velocity: THREE.Vector3;
-  life: number;     // 남은 수명 (초)
-  maxLife: number;  // 전체 수명
-  scale: number;    // 시작 크기
+  life: number; // 남은 수명 (초)
+  maxLife: number; // 전체 수명
+  scale: number; // 시작 크기
 }
 
 const POOL_SIZE = 200;
@@ -20,11 +20,11 @@ const DUST_GEOMETRY = new THREE.PlaneGeometry(0.3, 0.3);
 
 export interface DustSystemOptions {
   scene: THREE.Scene;
-  spawnRadius?: number;        // 발 중심에서 반경 (m)
-  spawnPerSecond?: number;     // 초당 생성 (이동 중)
-  lifetime?: number;           // 수명 (초)
-  baseColor?: number;          // 베이스 색
-  boostMultiplier?: number;    // 부스터 시 생성 배율
+  spawnRadius?: number; // 발 중심에서 반경 (m)
+  spawnPerSecond?: number; // 초당 생성 (이동 중)
+  lifetime?: number; // 수명 (초)
+  baseColor?: number; // 베이스 색
+  boostMultiplier?: number; // 부스터 시 생성 배율
 }
 
 export class DustSystem {
@@ -134,7 +134,10 @@ export class DustSystem {
     // 비활성 파티클 찾기
     let idx = -1;
     for (let i = 0; i < this.particles.length; i++) {
-      if (!this.particles[i].active) { idx = i; break; }
+      if (!this.particles[i].active) {
+        idx = i;
+        break;
+      }
     }
     if (idx < 0) return; // 풀이 가득 참
 

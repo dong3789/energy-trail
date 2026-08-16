@@ -94,7 +94,9 @@ export class RunnerAIStub {
     if (Math.abs(pz) > this.mapHalfDepth - margin) this.heading.z = pz > 0 ? -1 : 1;
     this.heading.normalize();
 
-    const next = this.tmpVec.copy(this.mesh.position).addScaledVector(this.heading, this.baseSpeed * dt);
+    const next = this.tmpVec
+      .copy(this.mesh.position)
+      .addScaledVector(this.heading, this.baseSpeed * dt);
     // 자성 추가 (X/Z 각각)
     next.x += magnetX;
     next.z += magnetZ;
@@ -112,7 +114,7 @@ export class RunnerAIStub {
     this.mesh.position.z = this.resolveAxis(this.mesh.position.z, next.z, false);
 
     // v9: 갇힘 감지 — 1초 이상 안 움직이면 헤딩 강제 변경
-    const moved = (this.mesh.position.x - oldX) + (this.mesh.position.z - oldZ);
+    const moved = this.mesh.position.x - oldX + (this.mesh.position.z - oldZ);
     if (Math.abs(moved) < 0.01) {
       this.stuckTimer += dt;
       if (this.stuckTimer > this.STUCK_THRESHOLD) {
@@ -121,8 +123,10 @@ export class RunnerAIStub {
           const testAngle = (i / 8) * Math.PI * 2;
           const testDir = new THREE.Vector3(Math.cos(testAngle), 0, Math.sin(testAngle));
           const testNext = this.mesh.position.clone().addScaledVector(testDir, this.baseSpeed * dt);
-          if (this.resolveAxis(this.mesh.position.x, testNext.x, true) !== this.mesh.position.x ||
-              this.resolveAxis(this.mesh.position.z, testNext.z, false) !== this.mesh.position.z) {
+          if (
+            this.resolveAxis(this.mesh.position.x, testNext.x, true) !== this.mesh.position.x ||
+            this.resolveAxis(this.mesh.position.z, testNext.z, false) !== this.mesh.position.z
+          ) {
             this.heading.copy(testDir);
             this.stuckTimer = 0;
             this.turnTimer = 0.5; // 다음 헤딩 변경도 빠르게
@@ -136,7 +140,9 @@ export class RunnerAIStub {
     this.lastPosition.copy(this.mesh.position);
   }
 
-  getPosition(): THREE.Vector3 { return this.mesh.position; }
+  getPosition(): THREE.Vector3 {
+    return this.mesh.position;
+  }
 
   private pickNewHeading(): void {
     const angle = Math.random() * Math.PI * 2;
@@ -153,11 +159,21 @@ export class RunnerAIStub {
       const ozMin = o.z - o.depth / 2 - margin;
       const ozMax = o.z + o.depth / 2 + margin;
       if (isX) {
-        if (clamped >= oxMin && clamped <= oxMax && this.mesh.position.z >= ozMin && this.mesh.position.z <= ozMax) {
+        if (
+          clamped >= oxMin &&
+          clamped <= oxMax &&
+          this.mesh.position.z >= ozMin &&
+          this.mesh.position.z <= ozMax
+        ) {
           clamped = current;
         }
       } else {
-        if (clamped >= ozMin && clamped <= ozMax && this.mesh.position.x >= oxMin && this.mesh.position.x <= oxMax) {
+        if (
+          clamped >= ozMin &&
+          clamped <= ozMax &&
+          this.mesh.position.x >= oxMin &&
+          this.mesh.position.x <= oxMax
+        ) {
           clamped = current;
         }
       }

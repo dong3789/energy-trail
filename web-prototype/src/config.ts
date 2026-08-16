@@ -22,10 +22,10 @@ export interface MapDef {
   groundColor: number;
   wallColor: number;
   obstacleColor: number;
-  obstacleAccent: number;    // 상단 액센트 (밝은 색)
+  obstacleAccent: number; // 상단 액센트 (밝은 색)
   buildingColorA: number;
   buildingColorB: number;
-  buildingRoof: number;      // 지붕 색
+  buildingRoof: number; // 지붕 색
   treeColor: number;
   exitColor: number;
   ambientColor: number;
@@ -42,17 +42,17 @@ export const MAPS: Record<MapId, MapDef> = {
     difficulty: 1,
     previewColorA: 0xb4e4f4,
     previewColorB: 0xffb3d9,
-    skyColor: 0xa8e0ff,           // 맑은 파란 하늘
-    groundColor: 0xc8e878,        // 형광 파스텔 잔디
-    wallColor: 0xff85a2,          // 핑크 벽
-    obstacleColor: 0xffe14a,      // 노란 큐브
-    obstacleAccent: 0xff85a2,     // 핑크 액센트
-    buildingColorA: 0x6dd5ed,     // 시안
-    buildingColorB: 0xffd83d,     // 골드
-    buildingRoof: 0xff5c8a,       // 핑크 지붕
-    treeColor: 0x2ecc71,          // 형광 그린
-    exitColor: 0xfff44a,          // 형광 노랑
-    ambientColor: 0xfff5e1,       // 따뜻한 햇빛
+    skyColor: 0xa8e0ff, // 맑은 파란 하늘
+    groundColor: 0xc8e878, // 형광 파스텔 잔디
+    wallColor: 0xff85a2, // 핑크 벽
+    obstacleColor: 0xffe14a, // 노란 큐브
+    obstacleAccent: 0xff85a2, // 핑크 액센트
+    buildingColorA: 0x6dd5ed, // 시안
+    buildingColorB: 0xffd83d, // 골드
+    buildingRoof: 0xff5c8a, // 핑크 지붕
+    treeColor: 0x2ecc71, // 형광 그린
+    exitColor: 0xfff44a, // 형광 노랑
+    ambientColor: 0xfff5e1, // 따뜻한 햇빛
     sunColor: 0xfff0c0,
     fogNear: 32,
     fogFar: 80,
@@ -65,12 +65,12 @@ export const MAPS: Record<MapId, MapDef> = {
     previewColorA: 0xffb3d9,
     previewColorB: 0x6dd5ed,
     skyColor: 0xa8e0ff,
-    groundColor: 0xffd83d,        // 골드 잔디
-    wallColor: 0x6dd5ed,          // 시안 벽
-    obstacleColor: 0xff85a2,      // 핑크
+    groundColor: 0xffd83d, // 골드 잔디
+    wallColor: 0x6dd5ed, // 시안 벽
+    obstacleColor: 0xff85a2, // 핑크
     obstacleAccent: 0xfff44a,
-    buildingColorA: 0x9b59b6,     // 퍼플
-    buildingColorB: 0x6dd5ed,     // 시안
+    buildingColorA: 0x9b59b6, // 퍼플
+    buildingColorB: 0x6dd5ed, // 시안
     buildingRoof: 0xff5c8a,
     treeColor: 0x2ecc71,
     exitColor: 0x9b59b6,
@@ -87,12 +87,12 @@ export const MAPS: Record<MapId, MapDef> = {
     previewColorA: 0x6dd5ed,
     previewColorB: 0x2ecc71,
     skyColor: 0x84c8ff,
-    groundColor: 0x84e0b8,        // 청록 잔디
+    groundColor: 0x84e0b8, // 청록 잔디
     wallColor: 0xff85a2,
-    obstacleColor: 0x9b59b6,      // 퍼플
+    obstacleColor: 0x9b59b6, // 퍼플
     obstacleAccent: 0xfff44a,
-    buildingColorA: 0xff5c8a,     // 핑크
-    buildingColorB: 0xfff44a,     // 노랑
+    buildingColorA: 0xff5c8a, // 핑크
+    buildingColorB: 0xfff44a, // 노랑
     buildingRoof: 0x9b59b6,
     treeColor: 0x2ecc71,
     exitColor: 0xff5c8a,
@@ -211,7 +211,7 @@ export const SCENE = {
   // v28: 4.0 → 2.5 — daylight는 가까이 (캐릭터 클로즈업)
   cameraFollowLookAhead: 2.5,
   cameraFollowSmoothing: 0.08, // 0~1, 클수록 빠르게 따라옴 (낮을수록 부드러움)
-  cameraFollowShake: 0.04,     // 살짝 호흡감 추가
+  cameraFollowShake: 0.04, // 살짝 호흡감 추가
 
   // 2026-08-15 v28: Reflector OFF (daylight 로우폴리)
   reflectorEnabled: false,
@@ -224,8 +224,8 @@ export const SCENE = {
   fovLerpSpeed: 8.0,
 
   // === v33: role별 카메라 FOV — 도망자가 술래보다 넓은 시야 (회피 유리) ===
-  cameraFovTagger: 68,   // 술래: 좁고 정밀한 시야
-  cameraFovRunner: 82,   // 도망자: 넓은 시야 (술래를 먼저 보자)
+  cameraFovTagger: 68, // 술래: 좁고 정밀한 시야
+  cameraFovRunner: 82, // 도망자: 넓은 시야 (술래를 먼저 보자)
 } as const;
 
 // ============================================================
@@ -234,23 +234,23 @@ export const SCENE = {
 export const MAP = {
   width: 42,
   depth: 42,
-  wallHeight: 2.2,           // v28: 4.5 → 2.2 (낮은 담장)
+  wallHeight: 2.2, // v28: 4.5 → 2.2 (낮은 담장)
   wallThickness: 0.5,
 
   // v28: 바닥 — 맵별 색 (park = 잔디)
-  floorColor: 0x7fb069,      // 잔디 기본값 (MAPS에 의해 오버라이드됨)
-  floorRoughness: 0.95,      // v28: 0.25 → 0.95 (반사 없음, 매트)
-  floorMetalness: 0.0,       // v28: 0.55 → 0.0 (비금속)
+  floorColor: 0x7fb069, // 잔디 기본값 (MAPS에 의해 오버라이드됨)
+  floorRoughness: 0.95, // v28: 0.25 → 0.95 (반사 없음, 매트)
+  floorMetalness: 0.0, // v28: 0.55 → 0.0 (비금속)
 
   // 외곽벽 — 낮고 따뜻한 톤
-  wallColor: 0xc8b896,       // v28: 0x303a52 → 0xc8b896 (베이지)
-  wallEmissive: 0x000000,    // v28: 없음
+  wallColor: 0xc8b896, // v28: 0x303a52 → 0xc8b896 (베이지)
+  wallEmissive: 0x000000, // v28: 없음
   wallEmissiveIntensity: 0.0,
   wallRoughness: 0.85,
   wallMetalness: 0.0,
 
   // 내벽 장애물 — 크림/라이트 베이지
-  obstacleColor: 0xe8e0d0,   // v28: 0x424b66 → 0xe8e0d0 (크림)
+  obstacleColor: 0xe8e0d0, // v28: 0x424b66 → 0xe8e0d0 (크림)
   obstacleEmissive: 0x000000,
   obstacleEmissiveIntensity: 0.0,
   obstacleRoughness: 0.85,
@@ -268,40 +268,40 @@ export const MAP = {
 export interface ObstacleSpec {
   x: number;
   z: number;
-  width: number;   // X
-  height: number;  // Y
-  depth: number;   // Z
+  width: number; // X
+  height: number; // Y
+  depth: number; // Z
 }
 // 2026-08-09 v5: OBSTACLES 재설계 — 도망자(반경 0.45)는 들어갈 수 있고 술래(반경 0.63)는 막히는 좁은 틈 구조
 // 도망자 마진 0.6 = 통로 폭 ≥ 1.05m 필요, 술래 마진 0.6 = 통로 폭 ≥ 1.23m 필요
 // 따라서 통로 폭 0.6~0.9m이면 도망자만 통과 (적정 마진 포함)
 export const OBSTACLES: readonly ObstacleSpec[] = [
   // === 큰 박스 4개 — 벽/엄폐물 ===
-  { x: -8, z: -4, width: 3.0, height: 2.4, depth: 1.6 },   // 북서쪽 담장 (얇은 두께)
-  { x: 8, z: 6, width: 3.0, height: 2.4, depth: 1.6 },     // 동남쪽 담장
-  { x: -7, z: 8, width: 1.6, height: 2.0, depth: 3.0 },    // 북동쪽 박스 (담장)
-  { x: 7, z: -8, width: 1.6, height: 2.0, depth: 3.0 },    // 남서쪽 박스 (담장)
+  { x: -8, z: -4, width: 3.0, height: 2.4, depth: 1.6 }, // 북서쪽 담장 (얇은 두께)
+  { x: 8, z: 6, width: 3.0, height: 2.4, depth: 1.6 }, // 동남쪽 담장
+  { x: -7, z: 8, width: 1.6, height: 2.0, depth: 3.0 }, // 북동쪽 박스 (담장)
+  { x: 7, z: -8, width: 1.6, height: 2.0, depth: 3.0 }, // 남서쪽 박스 (담장)
 
   // === 좁은 통로 생성용 작은 박스들 (담장 사이에 0.7m 틈) ===
   // 북쪽 벽 (z = -5~-3 라인): 좌우 큰 박스 → 중앙에 0.7m 통로
-  { x: -4, z: -5, width: 1.0, height: 2.0, depth: 1.6 },  // 좌측 벽돌
-  { x: 4, z: -5, width: 1.0, height: 2.0, depth: 1.6 },   // 우측 벽돌 (중간 7m 통로)
+  { x: -4, z: -5, width: 1.0, height: 2.0, depth: 1.6 }, // 좌측 벽돌
+  { x: 4, z: -5, width: 1.0, height: 2.0, depth: 1.6 }, // 우측 벽돌 (중간 7m 통로)
 
   // 동쪽 벽 (x = 5~7 라인): 상하 작은 박스 → 중앙에 0.7m 통로
-  { x: 6, z: -2, width: 1.6, height: 2.0, depth: 1.0 },   // 상단 벽돌
-  { x: 6, z: 2, width: 1.6, height: 2.0, depth: 1.0 },    // 하단 벽돌
+  { x: 6, z: -2, width: 1.6, height: 2.0, depth: 1.0 }, // 상단 벽돌
+  { x: 6, z: 2, width: 1.6, height: 2.0, depth: 1.0 }, // 하단 벽돌
 
   // 중앙 L자 형 장애물 (시야 차단, 도망자 숨을 수 있는 코너)
-  { x: -3, z: 0, width: 4.0, height: 1.4, depth: 0.6 },    // 중앙 수평
-  { x: -3, z: 0, width: 0.6, height: 1.4, depth: 4.0 },    // 중앙 수직 (L자)
+  { x: -3, z: 0, width: 4.0, height: 1.4, depth: 0.6 }, // 중앙 수평
+  { x: -3, z: 0, width: 0.6, height: 1.4, depth: 4.0 }, // 중앙 수직 (L자)
 
   // === 술래 차단용 좁은 통로 벽 ===
   // z = 5 라인 벽 (남쪽): 두 박스 사이 0.8m 틈
-  { x: -3, z: 5, width: 2.0, height: 2.2, depth: 0.6 },    // 좌
-  { x: 3, z: 5, width: 2.0, height: 2.2, depth: 0.6 },     // 우
+  { x: -3, z: 5, width: 2.0, height: 2.2, depth: 0.6 }, // 좌
+  { x: 3, z: 5, width: 2.0, height: 2.2, depth: 0.6 }, // 우
   // x = -2 라인 벽 (서쪽): 두 박스 사이 0.8m 틈
-  { x: -2, z: -3, width: 0.6, height: 2.2, depth: 2.0 },   // 상
-  { x: -2, z: 3, width: 0.6, height: 2.2, depth: 2.0 },    // 하
+  { x: -2, z: -3, width: 0.6, height: 2.2, depth: 2.0 }, // 상
+  { x: -2, z: 3, width: 0.6, height: 2.2, depth: 2.0 }, // 하
 ] as const;
 
 // ============================================================
@@ -349,14 +349,16 @@ const OBSTACLES_DOWNTOWN: readonly ObstacleSpec[] = [
 ];
 
 // 2026-08-15: 맵 32 → 42 확장 시 OBSTACLES도 1.3배 스케일 (32 → 42 비율)
-const scaleObstacles = (s: number) => (arr: readonly ObstacleSpec[]): ObstacleSpec[] =>
-  arr.map((o) => ({ x: o.x * s, z: o.z * s, width: o.width, height: o.height, depth: o.depth }));
+const scaleObstacles =
+  (s: number) =>
+  (arr: readonly ObstacleSpec[]): ObstacleSpec[] =>
+    arr.map((o) => ({ x: o.x * s, z: o.z * s, width: o.width, height: o.height, depth: o.depth }));
 
 const scale13 = scaleObstacles(42 / 32); // ≈ 1.3125
 export const OBSTACLES_BY_MAP: Record<MapId, readonly ObstacleSpec[]> = {
-  'park': scale13(OBSTACLES),           // v28: neon-alley → park
-  'school': scale13(OBSTACLES_INDUSTRIAL), // v28: industrial-zone → school
-  'playground': scale13(OBSTACLES_DOWNTOWN), // v28: downtown → playground
+  park: scale13(OBSTACLES), // v28: neon-alley → park
+  school: scale13(OBSTACLES_INDUSTRIAL), // v28: industrial-zone → school
+  playground: scale13(OBSTACLES_DOWNTOWN), // v28: downtown → playground
 };
 
 // ============================================================
@@ -374,7 +376,7 @@ export const PLAYER = {
   // 2026-08-15 v30: 캐릭터 v5 — Fall Guys 스타일 (밝은 primary 색)
   // - 술래: 핑크 (Fall Guys 핑크 빈)
   // - 도망자: 시안/옐로우/퍼플
-  taggerColor: 0xff5c8a,        // v30: 핑크 (Fall Guys 핑크)
+  taggerColor: 0xff5c8a, // v30: 핑크 (Fall Guys 핑크)
   taggerAccent: 0xe83a6a,
   taggerEmissiveColor: 0x000000,
   taggerEmissiveIntensity: 0.0,
@@ -385,9 +387,9 @@ export const PLAYER = {
   taggerLabel: '술래',
   runnerLabel: '나',
   runnerColors: {
-    'runner-cyan': 0x4dd0e1,    // v30: Fall Guys 시안
-    'runner-yellow': 0xffd83d,  // v30: Fall Guys 옐로우
-    'runner-purple': 0x9b59b6,  // v30: Fall Guys 퍼플
+    'runner-cyan': 0x4dd0e1, // v30: Fall Guys 시안
+    'runner-yellow': 0xffd83d, // v30: Fall Guys 옐로우
+    'runner-purple': 0x9b59b6, // v30: Fall Guys 퍼플
   } as Record<string, number>,
 } as const;
 
@@ -396,10 +398,13 @@ export const PLAYER = {
 // ============================================================
 export type SpeedTier = 'walk' | 'run' | 'sprint';
 
-export const SPEED_TIERS: Record<SpeedTier, { multiplier: number; trailStrength: number; label: string; color: number }> = {
-  walk:   { multiplier: 1.0, trailStrength: 0.0,  label: '워크',   color: 0xb8b8c8 }, // v30: 라이트 그레이
-  run:    { multiplier: 1.4, trailStrength: 0.3,  label: '런',     color: 0x4dd0e1 }, // v30: 시안
-  sprint: { multiplier: 1.8, trailStrength: 0.7,  label: '스프린트', color: 0xffd83d }, // v30: 골드
+export const SPEED_TIERS: Record<
+  SpeedTier,
+  { multiplier: number; trailStrength: number; label: string; color: number }
+> = {
+  walk: { multiplier: 1.0, trailStrength: 0.0, label: '워크', color: 0xb8b8c8 }, // v30: 라이트 그레이
+  run: { multiplier: 1.4, trailStrength: 0.3, label: '런', color: 0x4dd0e1 }, // v30: 시안
+  sprint: { multiplier: 1.8, trailStrength: 0.7, label: '스프린트', color: 0xffd83d }, // v30: 골드
 } as const;
 
 export const GAME = {
@@ -409,21 +414,21 @@ export const GAME = {
   taggerCount: 1,
 
   // 승리 조건
-  taggerWinOutCount: 2,       // 5인 기준 (Phase A: 단일 플레이어 검증용으로 1)
-  runnerWinEscapeCount: 1,    // 1명이라도 탈출
+  taggerWinOutCount: 2, // 5인 기준 (Phase A: 단일 플레이어 검증용으로 1)
+  runnerWinEscapeCount: 1, // 1명이라도 탈출
 
   // 라운드
   roundSeconds: 150,
 
   // === Phase B: 이동 / 속도 3단계 / 자국 ===
-  baseSpeed: 4.5,                 // m/s, 1차 = 4.5. SPEED_TIERS.multiplier와 곱해 실제 속도 결정
-  rotationSpeed: 12,              // rad/s, 캐릭터가 이동 방향으로 회전하는 속도
+  baseSpeed: 4.5, // m/s, 1차 = 4.5. SPEED_TIERS.multiplier와 곱해 실제 속도 결정
+  rotationSpeed: 12, // rad/s, 캐릭터가 이동 방향으로 회전하는 속도
 
   // 자국 (Phase B: 1차 = 자국 생성/소멸만, 흡수는 Phase B+ 확장)
-  trailInterval: 0.18,            // m 이동마다 1개 생성
-  trailLifetime: 6.0,             // 자국 자연 소멸 시간 (초)
-  trailMaxCount: 80,              // 최대 자국 개수 (초과 시 오래된 자국부터 제거)
-  trailPoolSize: 100,             // 자국 오브젝트 풀 초기 크기
+  trailInterval: 0.18, // m 이동마다 1개 생성
+  trailLifetime: 6.0, // 자국 자연 소멸 시간 (초)
+  trailMaxCount: 80, // 최대 자국 개수 (초과 시 오래된 자국부터 제거)
+  trailPoolSize: 100, // 자국 오브젝트 풀 초기 크기
 
   // 흡수 (Phase B+ 확장 자리)
   absorbSeconds: 1.0,
@@ -450,7 +455,7 @@ export const GAME = {
   // - B = 부스터 (기존, 유지)
   // - 클릭(왼쪽) = 즉시 사격
   // - F = 조준 사격 (홀딩→조준선→떼면 발사) — 도망자 F=얼림과 충돌 → Shift로 변경
-  shotKey: 'KeyF',         // F = 사격 (홀딩 조준)
+  shotKey: 'KeyF', // F = 사격 (홀딩 조준)
   shotClickKey: 'Pointer0', // 마우스 왼쪽 = 즉시 사격
   shotRange: 20,
   shotCooldown: 1.5,
@@ -468,32 +473,32 @@ export const GAME = {
   iceDuration: 3.0,
   // v6: 15.0 → 12.0 — 라운드당 사용 횟수 12~13회 (도망자 유리)
   iceCooldown: 12.0,
-  iceTaggerTint: 0x66e0ff,           // 술래 동결 시 색상 (얼음 시안)
+  iceTaggerTint: 0x66e0ff, // 술래 동결 시 색상 (얼음 시안)
 
   // 2026-08-09 v5: 술래 크기 + 부스터 시스템
   // 술래 반경/높이 (캡슐) — 도망자보다 큼 (반경 1.4배)
-  taggerScale: 1.4,                  // PLAYER.radius * 1.4 = 0.63, height 비례
+  taggerScale: 1.4, // PLAYER.radius * 1.4 = 0.63, height 비례
   // 부스터 (B 키) — 짧은 폭주 + 누적 피로
   // 2026-08-15 v8: 부스터 재밸런스 — "무한 부스트" 버그 수정
   // - 피로 100 캡인데 정지 임계값이 120이라 정지 안 일어남
   // - → 80/0.7로 낮춰서 실제로 정지 트리거
   // - 1사이클에 ~4번 부스터, 이후 2초 정지 → 긴장감 ↑
-  boostKey: 'Space',       // Space = 부스터 (기본, 접근성 ↑)
-  boostKeyAlt: 'KeyB',     // B = 부스터 (대안)
-  boostActiveSpeedMul: 1.5,          // 부스트 활성 중 속도 배율 추가
-  boostActiveDuration: 1.5,          // 부스트 1회 지속 (초)
-  boostFatiguePerUse: 18,            // 12 → 18 (1사이클 4회)
-  boostCooldown: 0.8,                // 0.5 → 0.8 (잦은 연타 방지)
+  boostKey: 'Space', // Space = 부스터 (기본, 접근성 ↑)
+  boostKeyAlt: 'KeyB', // B = 부스터 (대안)
+  boostActiveSpeedMul: 1.5, // 부스트 활성 중 속도 배율 추가
+  boostActiveDuration: 1.5, // 부스트 1회 지속 (초)
+  boostFatiguePerUse: 18, // 12 → 18 (1사이클 4회)
+  boostCooldown: 0.8, // 0.5 → 0.8 (잦은 연타 방지)
   // 피로 → 효과 변환
-  boostFatigueShrink: 0.50,          // 0.55 → 0.50 (피로 100일 때 scale = 0.5)
-  boostFatigueSpeedMul: 0.50,        // 0.60 → 0.50 (피로 100일 때 speed 50% = 절반 속도)
+  boostFatigueShrink: 0.5, // 0.55 → 0.50 (피로 100일 때 scale = 0.5)
+  boostFatigueSpeedMul: 0.5, // 0.60 → 0.50 (피로 100일 때 speed 50% = 절반 속도)
   // 회복 정지 — 실제로 트리거되도록 보정
-  boostStallThreshold: 80,           // 120 → 80 (정지 임계값 = 피로 80)
-  boostStallMinSpeed: 0.7,           // 0.4 → 0.7 (피로 80에서 speed 0.68 < 0.7 → 정지)
-  boostStallDuration: 2.0,           // 1.5 → 2.0 (정지 시간 충분)
-  boostStallRecoveryRate: 35,        // 50 → 35 (정지 중 회복 35/s, 2초 = 70 회복)
+  boostStallThreshold: 80, // 120 → 80 (정지 임계값 = 피로 80)
+  boostStallMinSpeed: 0.7, // 0.4 → 0.7 (피로 80에서 speed 0.68 < 0.7 → 정지)
+  boostStallDuration: 2.0, // 1.5 → 2.0 (정지 시간 충분)
+  boostStallRecoveryRate: 35, // 50 → 35 (정지 중 회복 35/s, 2초 = 70 회복)
 
   // 2026-08-09 v6: 장애물 자성 — 도망자(AI)가 장애물 근처에서 미세하게 끌어당겨짐
-  obstacleMagnetism: 0.6,           // 마진 내 인력 계수 (m/s² 스케일, m 단위 가속)
-  obstacleMagnetismRange: 0.6,       // 마진 대비 추가 자성 범위 (마진 + 이만큼 = 자성 영향 반경)
+  obstacleMagnetism: 0.6, // 마진 내 인력 계수 (m/s² 스케일, m 단위 가속)
+  obstacleMagnetismRange: 0.6, // 마진 대비 추가 자성 범위 (마진 + 이만큼 = 자성 영향 반경)
 } as const;

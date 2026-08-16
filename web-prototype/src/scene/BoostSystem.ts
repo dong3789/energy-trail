@@ -13,21 +13,21 @@ export interface BoostSystemOptions {
 }
 
 export interface BoostVisualParams {
-  scale: number;       // 1.0 (정상) → 0.55 (fatigue 100)
-  speedMul: number;    // 1.0 → 0.60
+  scale: number; // 1.0 (정상) → 0.55 (fatigue 100)
+  speedMul: number; // 1.0 → 0.60
   isBoosting: boolean; // 부스터 활성 중
   isStalling: boolean; // 회복 정지 중
-  fatigue: number;     // 0~100
+  fatigue: number; // 0~100
 }
 
 export class BoostSystem {
   private readonly onVisualChange?: (p: BoostVisualParams) => void;
   private readonly onStallChange?: (b: boolean) => void;
 
-  private fatigue = 0;            // 0~100
+  private fatigue = 0; // 0~100
   private boostActiveRemaining = 0; // 부스터 활성 남은 시간
   private boostCooldownRemaining = 0;
-  private stalling = false;        // 회복 정지 중
+  private stalling = false; // 회복 정지 중
   private stallRemaining = 0;
   private wasStalling = false;
 
@@ -108,16 +108,24 @@ export class BoostSystem {
   }
 
   /** 정지 중? */
-  isStalling(): boolean { return this.stalling; }
+  isStalling(): boolean {
+    return this.stalling;
+  }
 
   /** 부스터 활성 중? */
-  isBoosting(): boolean { return this.boostActiveRemaining > 0; }
+  isBoosting(): boolean {
+    return this.boostActiveRemaining > 0;
+  }
 
   /** 피로도 0~100 */
-  getFatigue(): number { return this.fatigue; }
+  getFatigue(): number {
+    return this.fatigue;
+  }
 
   /** 쿨다운 (UI 표시용) */
-  getCooldownRemaining(): number { return this.boostCooldownRemaining; }
+  getCooldownRemaining(): number {
+    return this.boostCooldownRemaining;
+  }
 
   private emitVisual(): void {
     if (!this.onVisualChange) return;

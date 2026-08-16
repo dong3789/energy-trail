@@ -10,15 +10,15 @@ import * as THREE from 'three';
 import { GAME, SPEED_TIERS, type SpeedTier, type ObstacleSpec } from '../config';
 
 export interface PlayerInputState {
-  forward: number;   // -1..1 (W=1, S=-1)
-  right: number;     // -1..1 (D=1, A=-1)
+  forward: number; // -1..1 (W=1, S=-1)
+  right: number; // -1..1 (D=1, A=-1)
 }
 
 export interface PlayerControllerOptions {
   scene: THREE.Scene;
   mesh: THREE.Mesh;
   obstacles: readonly ObstacleSpec[];
-  mapHalfWidth: number;   // x ± (MAP.width / 2 - 캐릭터 반경 마진)
+  mapHalfWidth: number; // x ± (MAP.width / 2 - 캐릭터 반경 마진)
   mapHalfDepth: number;
   inputTarget?: HTMLElement | Window; // 키 이벤트 받을 타겟 (기본 window — 포커스 무관 안정)
   collisionMargin?: number; // v5: 도망자는 0.4 (좁은 틈 통과), 술래는 기본 0.6
@@ -49,7 +49,7 @@ export class PlayerController {
   // - 가속: 0.18, 감속: 0.22 (가속 살짝 느리게, 멈춤 빠르게)
   private smoothInputF = 0;
   private smoothInputR = 0;
-  private readonly accelLerp = 0.18;  // 0~1, 클수록 즉시 반응
+  private readonly accelLerp = 0.18; // 0~1, 클수록 즉시 반응
   private readonly decelLerp = 0.22;
   // 대시 시스템: 짧은 시간 동안 2배 속도 (Shift)
   private dashTimeLeft = 0;
@@ -63,7 +63,9 @@ export class PlayerController {
   private frozen = false; // 2026-08-09 v4: 얼림 — true면 입력 무시
 
   // 디버그 헬퍼 — 최신 입력값 (HUD에서 읽음)
-  getDebugInput(): PlayerInputState { return { ...this.input }; }
+  getDebugInput(): PlayerInputState {
+    return { ...this.input };
+  }
 
   // 키 핸들러 정리용
   private readonly keyDownHandler: (e: KeyboardEvent) => void;
@@ -88,8 +90,12 @@ export class PlayerController {
     this.inputTarget.addEventListener('keydown', this.keyDownSpeedHandler as EventListener);
   }
 
-  getSpeedTier(): SpeedTier { return this.speedTier; }
-  setSpeedTier(tier: SpeedTier): void { this.speedTier = tier; }
+  getSpeedTier(): SpeedTier {
+    return this.speedTier;
+  }
+  setSpeedTier(tier: SpeedTier): void {
+    this.speedTier = tier;
+  }
   setFrozen(value: boolean): void {
     this.frozen = value;
     if (value) {
@@ -98,7 +104,9 @@ export class PlayerController {
       this.input.right = 0;
     }
   }
-  isFrozen(): boolean { return this.frozen; }
+  isFrozen(): boolean {
+    return this.frozen;
+  }
 
   // 2026-08-15: 흡수 중 (1초 유지) — 이동 차단, 회전 차단
   private absorbing = false;
@@ -109,12 +117,18 @@ export class PlayerController {
       this.input.right = 0;
     }
   }
-  isAbsorbing(): boolean { return this.absorbing; }
+  isAbsorbing(): boolean {
+    return this.absorbing;
+  }
 
   // 2026-08-15: 흡수 후 가속 (boostRemaining 동안 적용)
   private boostSpeedMul = 1.0;
-  setBoostSpeedMultiplier(mul: number): void { this.boostSpeedMul = Math.max(1.0, mul); }
-  getBoostSpeedMultiplier(): number { return this.boostSpeedMul; }
+  setBoostSpeedMultiplier(mul: number): void {
+    this.boostSpeedMul = Math.max(1.0, mul);
+  }
+  getBoostSpeedMultiplier(): number {
+    return this.boostSpeedMul;
+  }
 
   // v6: 터치/외부 입력 직접 주입 (조이스틱 등 가상 입력용)
   setInput(forward: number, right: number): void {
@@ -123,7 +137,9 @@ export class PlayerController {
   }
 
   /** 외부에서 라벨 텍스트 등을 업데이트하기 위한 핸들. */
-  getPosition(): THREE.Vector3 { return this.mesh.position; }
+  getPosition(): THREE.Vector3 {
+    return this.mesh.position;
+  }
 
   // 2026-08-15: 카메라 회전과 무관하게 W = 자기 앞, S = 자기 뒤가 되도록
   // main.ts가 매 프레임 캐릭터의 월드 forward/right를 전달
@@ -207,9 +223,15 @@ export class PlayerController {
     this.dashCooldownLeft = this.DASH_COOLDOWN;
     return true;
   }
-  isDashing(): boolean { return this.dashTimeLeft > 0; }
-  getDashCooldownRemaining(): number { return this.dashCooldownLeft; }
-  getDashCooldownMax(): number { return this.DASH_COOLDOWN; }
+  isDashing(): boolean {
+    return this.dashTimeLeft > 0;
+  }
+  getDashCooldownRemaining(): number {
+    return this.dashCooldownLeft;
+  }
+  getDashCooldownMax(): number {
+    return this.DASH_COOLDOWN;
+  }
 
   private resolveAxis(current: number, target: number, isX: boolean): number {
     const half = isX ? this.mapHalfWidth : this.mapHalfDepth;
@@ -223,12 +245,22 @@ export class PlayerController {
       const ozMin = o.z - o.depth / 2 - margin;
       const ozMax = o.z + o.depth / 2 + margin;
       if (isX) {
-        if (clamped >= oxMin && clamped <= oxMax && this.mesh.position.z >= ozMin && this.mesh.position.z <= ozMax) {
+        if (
+          clamped >= oxMin &&
+          clamped <= oxMax &&
+          this.mesh.position.z >= ozMin &&
+          this.mesh.position.z <= ozMax
+        ) {
           // 충돌: 현재 X 유지
           clamped = current;
         }
       } else {
-        if (clamped >= ozMin && clamped <= ozMax && this.mesh.position.x >= oxMin && this.mesh.position.x <= oxMax) {
+        if (
+          clamped >= ozMin &&
+          clamped <= ozMax &&
+          this.mesh.position.x >= oxMin &&
+          this.mesh.position.x <= oxMax
+        ) {
           clamped = current;
         }
       }
@@ -238,28 +270,58 @@ export class PlayerController {
 
   private onKeyDown(e: KeyboardEvent): void {
     switch (e.code) {
-      case 'KeyW': case 'ArrowUp':    this.input.forward = 1; break;
-      case 'KeyS': case 'ArrowDown':  this.input.forward = -1; break;
-      case 'KeyA': case 'ArrowLeft':  this.input.right = -1; break;
-      case 'KeyD': case 'ArrowRight': this.input.right = 1; break;
+      case 'KeyW':
+      case 'ArrowUp':
+        this.input.forward = 1;
+        break;
+      case 'KeyS':
+      case 'ArrowDown':
+        this.input.forward = -1;
+        break;
+      case 'KeyA':
+      case 'ArrowLeft':
+        this.input.right = -1;
+        break;
+      case 'KeyD':
+      case 'ArrowRight':
+        this.input.right = 1;
+        break;
     }
   }
 
   private onKeyUp(e: KeyboardEvent): void {
     switch (e.code) {
-      case 'KeyW': case 'ArrowUp':    if (this.input.forward > 0) this.input.forward = 0; break;
-      case 'KeyS': case 'ArrowDown':  if (this.input.forward < 0) this.input.forward = 0; break;
-      case 'KeyA': case 'ArrowLeft':  if (this.input.right < 0) this.input.right = 0; break;
-      case 'KeyD': case 'ArrowRight': if (this.input.right > 0) this.input.right = 0; break;
+      case 'KeyW':
+      case 'ArrowUp':
+        if (this.input.forward > 0) this.input.forward = 0;
+        break;
+      case 'KeyS':
+      case 'ArrowDown':
+        if (this.input.forward < 0) this.input.forward = 0;
+        break;
+      case 'KeyA':
+      case 'ArrowLeft':
+        if (this.input.right < 0) this.input.right = 0;
+        break;
+      case 'KeyD':
+      case 'ArrowRight':
+        if (this.input.right > 0) this.input.right = 0;
+        break;
     }
   }
 
   private onKeyDownSpeed(e: KeyboardEvent): void {
     if (e.repeat) return;
     switch (e.code) {
-      case 'Digit1': this.speedTier = 'walk'; break;
-      case 'Digit2': this.speedTier = 'run'; break;
-      case 'Digit3': this.speedTier = 'sprint'; break;
+      case 'Digit1':
+        this.speedTier = 'walk';
+        break;
+      case 'Digit2':
+        this.speedTier = 'run';
+        break;
+      case 'Digit3':
+        this.speedTier = 'sprint';
+        break;
     }
   }
 

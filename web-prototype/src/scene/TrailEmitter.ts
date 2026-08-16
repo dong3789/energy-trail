@@ -27,7 +27,7 @@ interface ActiveTrail {
 
 export interface TrailEmitterOptions {
   scene: THREE.Scene;
-  tagger: THREE.Object3D;       // 술래 mesh 또는 AI 객체 — position/quaternion 사용
+  tagger: THREE.Object3D; // 술래 mesh 또는 AI 객체 — position/quaternion 사용
   taggerSpeedTierRef: { current: SpeedTier };
   isTaggerFrozenRef?: { current: boolean }; // 얼림 중이면 자국 안 남김
 }
@@ -146,14 +146,19 @@ export class TrailEmitter {
   }
 
   /** 현재 활성 자국 개수 (HUD용) */
-  getActiveCount(): number { return this.active.length; }
+  getActiveCount(): number {
+    return this.active.length;
+  }
 
   /**
    * 2026-08-15: 흡수 가능 자국 쿼리
    * - position 주변 radius 내에 가장 가까운 활성 자국이 있는지 검사
    * - @returns hit 여부, 자국 위치, 자국 강도(strength = 0~1, 색 농도)
    */
-  queryNearest(position: THREE.Vector3, radius: number): {
+  queryNearest(
+    position: THREE.Vector3,
+    radius: number,
+  ): {
     hit: boolean;
     position: THREE.Vector3 | null;
     strength: number;

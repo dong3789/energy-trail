@@ -99,11 +99,17 @@ export class TaggerAI {
     this.mesh.position.z = this.resolveAxis(this.mesh.position.z, next.z, false);
   }
 
-  getPosition(): THREE.Vector3 { return this.mesh.position; }
+  getPosition(): THREE.Vector3 {
+    return this.mesh.position;
+  }
 
   // 2026-08-09 v4: 얼림 — true면 update에서 이동/회전 스킵 (자국도 안 남음)
-  setFrozen(value: boolean): void { this.frozen = value; }
-  isFrozen(): boolean { return this.frozen; }
+  setFrozen(value: boolean): void {
+    this.frozen = value;
+  }
+  isFrozen(): boolean {
+    return this.frozen;
+  }
 
   private pickNewHeading(): void {
     const angle = Math.random() * Math.PI * 2;
@@ -120,11 +126,21 @@ export class TaggerAI {
       const ozMin = o.z - o.depth / 2 - margin;
       const ozMax = o.z + o.depth / 2 + margin;
       if (isX) {
-        if (clamped >= oxMin && clamped <= oxMax && this.mesh.position.z >= ozMin && this.mesh.position.z <= ozMax) {
+        if (
+          clamped >= oxMin &&
+          clamped <= oxMax &&
+          this.mesh.position.z >= ozMin &&
+          this.mesh.position.z <= ozMax
+        ) {
           clamped = current;
         }
       } else {
-        if (clamped >= ozMin && clamped <= ozMax && this.mesh.position.x >= oxMin && this.mesh.position.x <= oxMax) {
+        if (
+          clamped >= ozMin &&
+          clamped <= ozMax &&
+          this.mesh.position.x >= oxMin &&
+          this.mesh.position.x <= oxMax
+        ) {
           clamped = current;
         }
       }
