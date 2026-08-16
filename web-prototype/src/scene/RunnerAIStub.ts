@@ -66,7 +66,6 @@ export class RunnerAIStub {
     // v6: 장애물 자성 — 가까운 장애물이 있으면 미세하게 끌어당김
     let magnetX = 0;
     let magnetZ = 0;
-    let magnetStrength = 0;
     for (const o of this.obstacles) {
       // 장애물 AABB 가장 가까운 점
       const ox = Math.max(o.x - o.width / 2, Math.min(this.mesh.position.x, o.x + o.width / 2));
@@ -82,7 +81,6 @@ export class RunnerAIStub {
         const pull = GAME.obstacleMagnetism * k * dt;
         magnetX += (dx / d) * pull;
         magnetZ += (dz / d) * pull;
-        magnetStrength += k;
       }
     }
 

@@ -25,6 +25,7 @@ import { addCharacterFeatures } from './scene/CharacterFactory';
 import { DustSystem } from './scene/DustSystem';
 import { SoundManager } from './scene/SoundManager';
 import { AbsorbSystem } from './scene/AbsorbSystem';
+import { escapeHtml } from './lib/html-escape';
 
 type Screen = 'intro' | 'login' | 'character' | 'role' | 'map-select' | 'lobby' | 'room' | 'game';
 type CharacterId = 'runner-cyan' | 'runner-pink' | 'runner-yellow' | 'runner-purple';
@@ -62,7 +63,12 @@ interface GameState {
   sound: SoundManager | null; // 2026-08-15: 절차적 SFX
   absorb: AbsorbSystem | null; // 2026-08-15: 자국 흡수 시스템
   absorbHud: HTMLElement | null; // 2026-08-15: 흡수 진행 HUD
-  // 추후 캐릭터/자국 상태 확장
+  /**
+   * 2026-08-16: 게임 세션 자원 정리 콜백
+   * - renderGame 안에서 등록한 DOM/Three.js 이벤트를 teardownGame에서 일괄 해제
+   * - addTrackedListener/trackTimer 헬퍼로 push
+   */
+  disposers: Array<() => void>;
 }
 
 // 2026-08-09 v2: 캐릭터 식별용 머리 위 라벨 (캔버스 → Sprite). 카메라 오비팅과 무관하게 항상 정면.
@@ -223,7 +229,30 @@ const game: GameState = {
   sound: null,
   absorb: null,
   absorbHud: null,
+  disposers: [],
 };
+
+// 2026-08-16: 추적형 리스너 등록 — teardown에서 자동 해제
+// - canvasHost/window에 등록하는 모든 리스너는 이걸 통해 등록
+// - addEventListener를 직접 부르면 teardownGame이 못 찾음 → 누수
+function addTrackedListener(
+  target: EventTarget,
+  type: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handler: any,
+  options?: AddEventListenerOptions | boolean,
+): void {
+  target.addEventListener(type, handler, options);
+  game.disposers.push(() => target.removeEventListener(type, handler, options));
+}
+
+// 2026-08-16: 추적형 setTimeout — teardown에서 자동 클리어 (씬 떠난 뒤 콜백 방지)
+function trackTimeout(callback: () => void, ms: number): number {
+  const id = window.setTimeout(callback, ms);
+  // 이미 실행된 timeout은 clearTimeout이 no-op이라 안전
+  game.disposers.push(() => window.clearTimeout(id));
+  return id;
+}
 
 function setScreen(next: Screen): void {
   // 게임 화면을 떠날 때 Three.js 자원 정리
@@ -335,7 +364,8 @@ function renderLogin(): void {
       input.focus();
       return;
     }
-    profile.nickname = nickname;
+    // 2026-08-16: XSS 방지 — 입력 시 1회 escape. 이후 innerHTML 보간 모두 안전.
+    profile.nickname = escapeHtml(nickname);
     // v32: 캐릭터 선택은 room 안으로 — role로 직행
     setScreen('role');
   };
@@ -623,8 +653,25 @@ function renderRoom(): void {
       if (icon) icon.textContent = isReady ? '✕' : '✓';
       readyBtn.classList.toggle('done', isReady);
     }
+    // 2026-08-16: 시작 버튼 활성화 상태 동기화
+    if (startBtn) {
+      startBtn.classList.toggle('enabled', isReady);
+      startBtn.disabled = !isReady;
+    }
   });
+  // 2026-08-16: 시작 게이팅 — 준비 안 했으면 비활성. 솔로 모드는 준비 단계 스킵이 자연스러우나,
+  // 디자인 일관성 + "방장은 항상 준비됨" 룰로 통일.
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.classList.remove('enabled');
+  }
   startBtn?.addEventListener('click', () => {
+    if (!isReady) {
+      // 비활성 상태지만 강제 클릭 방어
+      startBtn.classList.add('shake');
+      setTimeout(() => startBtn.classList.remove('shake'), 400);
+      return;
+    }
     setScreen('game');
   });
   backBtn?.addEventListener('click', () => setScreen('lobby'));
@@ -648,7 +695,7 @@ function renderGame(): void {
   canvasHost.setAttribute('aria-label', '게임 화면 (WASD 이동, 1/2/3 속도)');
   wrap.appendChild(canvasHost);
   // 캔버스가 풀스크린 z-index로 위에 있을 때 키 포커스 잃지 않게 즉시 focus
-  setTimeout(() => {
+  trackTimeout(() => {
     try {
       canvasHost.focus({ preventScroll: true });
     } catch {
@@ -660,10 +707,6 @@ function renderGame(): void {
   // - PlayerController는 inputTarget=window에 등록됨 → 캔버스에서 stopPropagation 하면 window까지 안 가서 키 안 먹힘
   // - 캔버스 풀스크린이라서 stopPropagation 필요 없음 (button은 Space/Enter만 처리)
   // - 비워둠 (이전 코드는 제거)
-
-  canvasHost.addEventListener('keydown', () => {
-    /* no-op (window의 PlayerController가 받음) */
-  });
 
   // ============================================================
   // 2026-08-15: 카메라 자유 회전/줌 (3인칭 표준)
@@ -757,7 +800,7 @@ function renderGame(): void {
   }
 
   // 우클릭 컨텍스트 메뉴 차단 (드래그용)
-  canvasHost.addEventListener('contextmenu', (e) => e.preventDefault());
+  addTrackedListener(canvasHost, 'contextmenu', (e: Event) => (e as MouseEvent).preventDefault());
 
   // 2026-08-15 v3: V 키 = 카메라 모드 토글 (chase ↔ orbit)
   // - chase: 캐릭터 진행 방향 자동 추적 (도망자 추천 — 어디로 가든 카메라가 따라옴)
@@ -778,7 +821,7 @@ function renderGame(): void {
     const modeEl = document.querySelector('.game-debug-mode');
     if (modeEl) modeEl.textContent = `카메라: ${camState.mode === 'chase' ? '추적' : '자유'} (V)`;
   };
-  canvasHost.addEventListener('keydown', cameraModeHandler);
+  addTrackedListener(canvasHost, 'keydown', cameraModeHandler);
 
   // 2026-08-15 v3: Shift = 대시 (0.3s 짧은 돌진)
   const dashHandler = (e: KeyboardEvent): void => {
@@ -790,17 +833,18 @@ function renderGame(): void {
       if (dust) dust.burst(selfMesh.position, 12, 0.6, 1.2, 1.6, 0.4);
     }
   };
-  canvasHost.addEventListener('keydown', dashHandler);
+  addTrackedListener(canvasHost, 'keydown', dashHandler);
 
-  canvasHost.addEventListener('pointerdown', (e) => {
+  addTrackedListener(canvasHost, 'pointerdown', (e: Event) => {
+    const pe = e as PointerEvent;
     // 데스크탑: 좌/우클릭 모두 카메라 회전
-    const isMouse = e.pointerType === 'mouse' && (e.button === 0 || e.button === 2);
+    const isMouse = pe.pointerType === 'mouse' && (pe.button === 0 || pe.button === 2);
     // 모바일: 화면 우측 절반에서 시작한 단일 손가락 → 카메라 회전
-    const isRightHalf = e.pointerType === 'touch' && e.clientX > window.innerWidth / 2;
+    const isRightHalf = pe.pointerType === 'touch' && pe.clientX > window.innerWidth / 2;
     if (isMouse || isRightHalf) {
-      camState.dragPointerId = e.pointerId;
-      camState.lastX = e.clientX;
-      camState.lastY = e.clientY;
+      camState.dragPointerId = pe.pointerId;
+      camState.lastX = pe.clientX;
+      camState.lastY = pe.clientY;
       // 2026-08-15 v3: 드래그 시작 시 자동으로 orbit 모드
       if (camState.mode === 'chase') {
         camState.mode = 'orbit';
@@ -808,18 +852,19 @@ function renderGame(): void {
         if (modeEl) modeEl.textContent = '카메라: 자유 (V)';
       }
       try {
-        canvasHost.setPointerCapture(e.pointerId);
+        canvasHost.setPointerCapture(pe.pointerId);
       } catch {
         /* ignore */
       }
-      e.preventDefault();
+      pe.preventDefault();
     }
   });
 
-  canvasHost.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== camState.dragPointerId) return;
-    const dx = e.clientX - camState.lastX;
-    const dy = e.clientY - camState.lastY;
+  addTrackedListener(canvasHost, 'pointermove', (e: Event) => {
+    const pe = e as PointerEvent;
+    if (pe.pointerId !== camState.dragPointerId) return;
+    const dx = pe.clientX - camState.lastX;
+    const dy = pe.clientY - camState.lastY;
     // 2026-08-15 v2: target만 갱신, 실제 yaw/pitch는 매 프레임 lerp
     camState.yawTarget -= dx * CAM_LIMITS.yawSpeed;
     if (camState.yawTarget > Math.PI) camState.yawTarget -= 2 * Math.PI;
@@ -828,24 +873,27 @@ function renderGame(): void {
       CAM_LIMITS.pitchMin,
       Math.min(CAM_LIMITS.pitchMax, camState.pitchTarget + dy * CAM_LIMITS.pitchSpeed),
     );
-    camState.lastX = e.clientX;
-    camState.lastY = e.clientY;
+    camState.lastX = pe.clientX;
+    camState.lastY = pe.clientY;
   });
 
-  const endCamDrag = (e: PointerEvent): void => {
-    if (e.pointerId === camState.dragPointerId) {
+  const endCamDrag = (e: Event): void => {
+    const pe = e as PointerEvent;
+    if (pe.pointerId === camState.dragPointerId) {
       camState.dragPointerId = null;
     }
   };
-  canvasHost.addEventListener('pointerup', endCamDrag);
-  canvasHost.addEventListener('pointercancel', endCamDrag);
+  addTrackedListener(canvasHost, 'pointerup', endCamDrag);
+  addTrackedListener(canvasHost, 'pointercancel', endCamDrag);
 
   // 휠 줌 (preventDefault로 페이지 스크롤 차단)
-  canvasHost.addEventListener(
+  addTrackedListener(
+    canvasHost,
     'wheel',
-    (e) => {
-      e.preventDefault();
-      const dir = e.deltaY > 0 ? 1 : -1;
+    (e: Event) => {
+      const we = e as WheelEvent;
+      we.preventDefault();
+      const dir = we.deltaY > 0 ? 1 : -1;
       camState.distance = Math.max(
         CAM_LIMITS.distanceMin,
         Math.min(CAM_LIMITS.distanceMax, camState.distance + dir * CAM_LIMITS.distanceStep),
@@ -856,7 +904,7 @@ function renderGame(): void {
 
   // v6: 버튼 클릭이 캔버스 포커스를 빼앗지 않도록 mousedown 차단 + 포커스 복원
   // 사용자가 UI 외 영역 클릭 시 다시 캔버스로 포커스
-  wrap.addEventListener('pointerdown', (e) => {
+  addTrackedListener(wrap, 'pointerdown', (e: Event) => {
     // UI 버튼 클릭은 막지 않음 (정상 클릭 동작)
     const target = e.target as HTMLElement;
     if (target.closest('button') || target.closest('input')) return;
@@ -867,7 +915,7 @@ function renderGame(): void {
     }
   });
   // v6: mousedown 시 버튼이 focus를 받지 않게 방지 (pointerdown 보완)
-  wrap.addEventListener('mousedown', (e) => {
+  addTrackedListener(wrap, 'mousedown', (e: Event) => {
     const target = e.target as HTMLElement;
     if (target.closest('button')) {
       // 버튼이 기본적으로 갖는 mousedown focus 동작은 캔버스가 처리하므로 preventDefault
@@ -1039,14 +1087,14 @@ function renderGame(): void {
       showPauseMenu();
     }
   };
-  canvasHost.addEventListener('keydown', escHandler);
+  addTrackedListener(canvasHost, 'keydown', escHandler);
 
   // Backquote (`) 키 = 디버그 HUD 토글
   const debugToggleHandler = (e: KeyboardEvent): void => {
     if (e.code !== 'Backquote') return;
     debug.style.display = debug.style.display === 'none' ? 'block' : 'none';
   };
-  canvasHost.addEventListener('keydown', debugToggleHandler);
+  addTrackedListener(canvasHost, 'keydown', debugToggleHandler);
 
   // 2026-08-15 v4: 액션 프롬프트 (화면 중앙 하단) — 맥락별 안내
   // - 자국 위: E 흡수 + 진행률
@@ -1063,7 +1111,7 @@ function renderGame(): void {
     actionPrompt.classList.add('show');
     // 3초 후 자동 숨김
     actionPromptHideUntil = performance.now() + 3000;
-    setTimeout(() => {
+    trackTimeout(() => {
       if (performance.now() >= actionPromptHideUntil) {
         actionPrompt.classList.remove('show');
       }
@@ -1116,7 +1164,7 @@ function renderGame(): void {
     if (e.code !== 'KeyM' || e.repeat) return;
     soundToggle.click();
   };
-  canvasHost.addEventListener('keydown', soundKeyHandler);
+  addTrackedListener(canvasHost, 'keydown', soundKeyHandler);
 
   root.appendChild(wrap);
 
@@ -1271,10 +1319,10 @@ function renderGame(): void {
     // v34: 카운트다운 비프음 (절대 피치로 3,2,1)
     if (sound && countdownIdx < 3) sound.playFootstep(0.6);
     // 다음 카운트다운
-    setTimeout(() => {
+    trackTimeout(() => {
       countdownEl.classList.remove('show');
       countdownIdx++;
-      setTimeout(tickCountdown, 250); // 0.25s 갭
+      trackTimeout(tickCountdown, 250); // 0.25s 갭
     }, 800);
   }
   tickCountdown();
@@ -1626,7 +1674,7 @@ function renderGame(): void {
       const origIntensity = boostMat.emissiveIntensity;
       boostMat.emissive.setHex(boostColor);
       boostMat.emissiveIntensity = 1.2;
-      setTimeout(() => {
+      trackTimeout(() => {
         boostMat.emissive.setHex(origColor);
         boostMat.emissiveIntensity = origIntensity;
       }, GAME.boostSeconds * 1000);
@@ -1738,8 +1786,8 @@ function renderGame(): void {
       }
     }
   };
-  canvasHost.addEventListener('keydown', absorbKeyHandler);
-  canvasHost.addEventListener('keyup', absorbKeyHandler);
+  addTrackedListener(canvasHost, 'keydown', absorbKeyHandler);
+  addTrackedListener(canvasHost, 'keyup', absorbKeyHandler);
   function distVecToTagger(): number {
     const dx = selfMesh.position.x - aiMesh.position.x;
     const dz = selfMesh.position.z - aiMesh.position.z;
@@ -1766,14 +1814,16 @@ function renderGame(): void {
   // 2026-08-15: 포박줄 발사 (술래만) — F 홀딩=조준, 떼면 발사
   // v2: keydown = 조준 ON, keyup = 발사
   // v8: shotKey F로 변경 (도망자 얼림과 충돌하지만 role별 분기)
-  canvasHost.addEventListener('keydown', (e) => {
-    if (e.code !== GAME.shotKey || !isTagger) return;
+  addTrackedListener(canvasHost, 'keydown', (e: Event) => {
+    const ke = e as KeyboardEvent;
+    if (ke.code !== GAME.shotKey || !isTagger) return;
     if (roundState !== 'playing' || game.out) return;
-    if (e.repeat) return;
+    if (ke.repeat) return;
     isAiming = true;
   });
-  canvasHost.addEventListener('keyup', (e) => {
-    if (e.code !== GAME.shotKey || !isTagger) return;
+  addTrackedListener(canvasHost, 'keyup', (e: Event) => {
+    const ke = e as KeyboardEvent;
+    if (ke.code !== GAME.shotKey || !isTagger) return;
     if (isAiming) {
       isAiming = false;
       // 발사 (준비 안 됐으면 무시)
@@ -1783,7 +1833,7 @@ function renderGame(): void {
     }
   });
   // 2026-08-15: 마우스 왼쪽 클릭 = 즉시 사격 (조준 없이)
-  canvasHost.addEventListener('click', (e) => {
+  addTrackedListener(canvasHost, 'click', (e: Event) => {
     if (!isTagger) return;
     if (roundState !== 'playing' || game.out) return;
     // UI 버튼 클릭은 무시
@@ -1985,7 +2035,7 @@ function renderGame(): void {
       piece.style.left = `${50 + (Math.random() - 0.5) * 30}%`;
       piece.style.top = '40%';
       resultOverlay.appendChild(piece);
-      setTimeout(() => piece.remove(), 2500);
+      trackTimeout(() => piece.remove(), 2500);
     }
   }
 
@@ -2010,7 +2060,7 @@ function renderGame(): void {
     // 2026-08-15: OUT 빨간 비네트 플래시
     if (game.outFlash) {
       game.outFlash.classList.add('active');
-      setTimeout(() => game.outFlash?.classList.remove('active'), 800);
+      trackTimeout(() => game.outFlash?.classList.remove('active'), 800);
     }
     // 2026-08-15: 흡수 정리
     if (absorb) absorb.reset();
@@ -2284,7 +2334,7 @@ function renderGame(): void {
               slowmoTime = 0.7;
               slowmoActive = true;
               if (canvasHost) canvasHost.classList.add('slowmo');
-              setTimeout(() => {
+              trackTimeout(() => {
                 if (canvasHost) canvasHost.classList.remove('slowmo');
                 slowmoActive = false;
               }, 700);
@@ -2688,6 +2738,17 @@ function renderGame(): void {
 }
 
 function teardownGame(): void {
+  // 2026-08-16: 추적된 리스너/타이머 일괄 해제
+  // (addTrackedListener/trackTimeout으로 등록된 모든 것)
+  for (const dispose of game.disposers) {
+    try {
+      dispose();
+    } catch (err) {
+      console.warn('[teardownGame] dispose 실패', err);
+    }
+  }
+  game.disposers = [];
+
   // 2026-08-15: 발사체는 renderGame 종료와 함께 GC되므로 별도 정리 불필요
   // (scene.dispose()에서 mesh 제거됨)
   if (game.player) {
