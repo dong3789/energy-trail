@@ -1318,74 +1318,44 @@ function renderGame(): void {
   // 2026-08-15: 라운드 시작 후 2초 그레이스 (술래 동결) — 도망자 즉시 OUT 방지
   const ROUND_START_GRACE_SEC = 2.0;
   let graceTimeLeft = 0;
-  // 2026-08-16: 카운트다운 안전망 — performance.now() 기반 폴링
-  // - 증상: 어떤 환경에서 setTimeout이 fire 안 해서 '3'에서 멈춤
-  // - 픽스: 매 프레임 update()에서 경과 시간 체크, setTimeout이 fire 안 해도
-  //   performance.now() 기반으로 다음 카운트다운 텍스트로 강제 전환
+  // 2026-08-16: 카운트다운 안전망 — performance.now() 기반 폴링 (Pass 8.2)
+  // - 증상: 어떤 환경(특히 데스크탑 특정 role)에서 setTimeout/setInterval 모두
+  //   fire 안 해서 '3'에서 영구 멈춤. Pass 8/8.1 (setTimeout 폴백, setInterval 추가)도 안 통함.
+  // - 픽스: setTimeout 의존도 완전 제거. 매 프레임 update()에서 performance.now()로
+  //   직접 텍스트 결정 + 직접 playing 전환. 가장 robust한 fix.
+  // - 한 번의 첫 tickCountdown은 첫 '3' 표시 + 비프음만 담당 (setTimeout 안 씀)
   const countdownStartedAt = performance.now();
   const COUNTDOWN_STEP_MS = 800; // 각 카운트다운 표시 시간
   const COUNTDOWN_GAP_MS = 250; // 카운트다운 사이 갭
   const COUNTDOWN_STEP_TOTAL = COUNTDOWN_STEP_MS + COUNTDOWN_GAP_MS; // 1050ms per step
+  // 2026-08-16: 매 프레임 카운트다운 진행 (setTimeout 없음)
+  // - idx 0 (3): 0 ~ 800ms
+  // - idx 1 (2): 1050 ~ 1850ms
+  // - idx 2 (1): 2100 ~ 2900ms
+  // - idx 3 (시작!): 3150 ~ 3950ms
+  // - playing 전환: >= 4200ms
+  let countdownFirstSfxPlayed = false;
   function tickCountdown(): void {
-    if (countdownIdx >= countdownSequence.length) {
-      countdownEl.classList.remove('show');
-      roundState = 'playing';
-      roundTime = GAME.roundSeconds;
-      roundStats.startedAt = performance.now();
-      // 2026-08-15: 그레이스 시작 — 술래 AI 동결, 도망자는 자유
-      if (taggerAI) taggerAI.setFrozen(true);
-      graceTimeLeft = ROUND_START_GRACE_SEC;
-      // v34: GO! 사운드 + 셰이크
-      if (sound) {
-        try {
-          sound.playAbsorbStart();
-        } catch (err) {
-          console.warn('[countdown] playAbsorbStart 실패', err);
-        }
-      }
-      triggerShake(0.3);
-      return;
-    }
-    if (countdownText) countdownText.textContent = countdownSequence[countdownIdx];
+    // 2026-08-16: 첫 호출은 첫 '3' 표시 + 비프음만. setTimeout 안 씀.
+    if (countdownText) countdownText.textContent = countdownSequence[0];
     countdownEl.classList.add('show');
-    // v34: 카운트다운 비프음 (절대 피치로 3,2,1) — try/catch로 throw 방어
-    if (sound && countdownIdx < 3) {
+    if (sound && !countdownFirstSfxPlayed) {
       try {
         sound.playFootstep(0.6);
+        countdownFirstSfxPlayed = true;
       } catch (err) {
         console.warn('[countdown] playFootstep 실패 (계속 진행)', err);
       }
     }
-    // 다음 카운트다운
-    trackTimeout(() => {
-      countdownEl.classList.remove('show');
-      countdownIdx++;
-      trackTimeout(tickCountdown, COUNTDOWN_GAP_MS);
-    }, COUNTDOWN_STEP_MS);
   }
   tickCountdown();
-  // 2026-08-16: 카운트다운 폴링 안전망 — setTimeout이 어떤 이유로 fire 안 해도
-  // 매 프레임 (render loop) 카운트다운 텍스트가 시간에 맞춰 갱신되도록
-  // update 콜백에서 호출됨
-  // - Pass 8.1: 직접 텍스트 갱신 + playing 전환 (setTimeout 의존 X)
-  // - 1차 시도(setTimeout 50ms 후 tickCountdown 호출)도 setTimeout 자체가
-  //   fire 안 하는 환경이면 무한 대기 → 이게 '3' 멈춤의 진짜 원인
-  function pumpCountdownFallback(): void {
+  // 2026-08-16: 매 프레임 update()에서 호출. setTimeout/setInterval 없음.
+  // 어떤 환경에서든 requestAnimationFrame이 한 번이라도 fire하면 진행됨.
+  function updateCountdownFromTime(): void {
     if (roundState !== 'countdown') return;
     const elapsed = performance.now() - countdownStartedAt;
-    const expectedIdx = Math.min(
-      countdownSequence.length,
-      Math.floor(elapsed / COUNTDOWN_STEP_TOTAL),
-    );
-    if (expectedIdx <= countdownIdx) return;
-
-    console.warn(
-      `[countdown 폴링 안전망] setTimeout 멈춤 감지 — idx ${countdownIdx} → ${expectedIdx}로 강제 전환`,
-    );
-    countdownIdx = expectedIdx;
-
-    if (countdownIdx >= countdownSequence.length) {
-      // 2026-08-16: 직접 playing으로 전환 (setTimeout 무관)
+    // 4.2초 후: playing으로 전환
+    if (elapsed >= COUNTDOWN_STEP_TOTAL * countdownSequence.length) {
       countdownEl.classList.remove('show');
       roundState = 'playing';
       roundTime = GAME.roundSeconds;
@@ -1398,32 +1368,25 @@ function renderGame(): void {
         console.warn('[countdown] playAbsorbStart 실패', err);
       }
       triggerShake(0.3);
-    } else {
-      // 2026-08-16: 텍스트도 직접 갱신 (setTimeout 콜백 안 거치고)
-      if (countdownText) countdownText.textContent = countdownSequence[countdownIdx];
-      countdownEl.classList.add('show');
-      // 비프음도 직접
-      if (sound && countdownIdx < 3) {
-        try {
-          sound.playFootstep(0.6);
-        } catch (err) {
-          console.warn('[countdown] playFootstep 실패', err);
-        }
+      return;
+    }
+    // 현재 시간에 해당하는 카운트다운 idx 계산
+    const newIdx = Math.min(
+      countdownSequence.length - 1,
+      Math.floor(elapsed / COUNTDOWN_STEP_TOTAL),
+    );
+    if (newIdx === countdownIdx) return;
+    countdownIdx = newIdx;
+    if (countdownText) countdownText.textContent = countdownSequence[countdownIdx];
+    countdownEl.classList.add('show');
+    if (sound && countdownIdx < 3) {
+      try {
+        sound.playFootstep(0.6);
+      } catch (err) {
+        console.warn('[countdown] playFootstep 실패', err);
       }
     }
   }
-
-  // 2026-08-16: setInterval 추가 안전망 — requestAnimationFrame이 throttle되거나
-  // render loop가 어떤 이유로 fire 안 해도 200ms마다 강제 진행
-  const safetyInterval = setInterval(() => {
-    if (roundState !== 'countdown') {
-      clearInterval(safetyInterval);
-      return;
-    }
-    pumpCountdownFallback();
-  }, 200);
-  // teardownGame에서 clear되도록 disposers에 등록
-  game.disposers.push(() => clearInterval(safetyInterval));
 
   // 결과 표시 (Fall Guys WIN! / ELIMINATED! 카툰 스타일)
   function showResult(winner: 'tagger' | 'runner', reason: string): void {
@@ -2204,8 +2167,8 @@ function renderGame(): void {
 
     // 2026-08-15: 카운트다운 중에는 입력 차단 (시각만 진행)
     if (roundState === 'countdown') {
-      // 2026-08-16: 카운트다운 폴링 안전망 — setTimeout fire 안 해도 강제 전환
-      pumpCountdownFallback();
+      // 2026-08-16: 카운트다운 매 프레임 폴링 (Pass 8.2 — setTimeout 의존도 완전 제거)
+      updateCountdownFromTime();
       // 2026-08-15: 인트로 시네마틱 카메라 (고공 → 추적 위치)
       const introT = Math.min(1, (performance.now() - gameStartedAt) / (introDuration * 1000));
       // Easing: cubic ease-in-out
