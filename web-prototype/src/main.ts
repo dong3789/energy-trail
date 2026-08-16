@@ -1815,10 +1815,12 @@ function renderGame(): void {
     return Math.sqrt(dx * dx + dz * dz); // ES5 호환
   }
   // F 키로 얼림 발동 (도망자만) — 2026-08-09 v5: 캔버스에 등록 (포커스 안정)
-  canvasHost.addEventListener('keydown', iceKeyHandler);
+  // 2026-08-16: addTrackedListener 사용 — teardownGame에서 자동 해제
+  addTrackedListener(canvasHost, 'keydown', iceKeyHandler);
 
   // v5: 부스터 발동 (술래만) — Space 또는 B (두 키 모두)
   // 2026-08-15 v8: 사용자 요청 — Space = 부스터 (기본), B = 대안
+  // 2026-08-16: addTrackedListener 사용 — teardownGame에서 자동 해제
   const boostKeyHandler = (e: KeyboardEvent): void => {
     if (e.repeat) return;
     if (e.code !== GAME.boostKey && e.code !== (GAME.boostKeyAlt ?? 'KeyB')) return;
@@ -1832,7 +1834,7 @@ function renderGame(): void {
     // 2026-08-15: 부스터 스파크 버스트 (자기 발밑)
     if (dust) dust.burst(selfMesh.position, 18, 0.8, 1.5, 2.0, 0.5);
   };
-  canvasHost.addEventListener('keydown', boostKeyHandler);
+  addTrackedListener(canvasHost, 'keydown', boostKeyHandler);
 
   // 2026-08-15: 포박줄 발사 (술래만) — F 홀딩=조준, 떼면 발사
   // v2: keydown = 조준 ON, keyup = 발사
@@ -2812,21 +2814,10 @@ function teardownGame(): void {
     game.ice.reset();
     game.ice = null;
   }
-  if (game.iceKeyHandler) {
-    // 2026-08-09 v5: 캔버스에 등록했으므로 여기서도 캔버스에서 제거
-    const wrap = root.querySelector('.game-canvas-wrap');
-    const host = wrap?.querySelector<HTMLElement>('.game-canvas-host');
-    if (host) host.removeEventListener('keydown', game.iceKeyHandler);
-    window.removeEventListener('keydown', game.iceKeyHandler);
-    game.iceKeyHandler = null;
-  }
-  if (game.boostKeyHandler) {
-    const wrap = root.querySelector('.game-canvas-wrap');
-    const host = wrap?.querySelector<HTMLElement>('.game-canvas-host');
-    if (host) host.removeEventListener('keydown', game.boostKeyHandler);
-    window.removeEventListener('keydown', game.boostKeyHandler);
-    game.boostKeyHandler = null;
-  }
+  // 2026-08-16: iceKeyHandler/boostKeyHandler는 addTrackedListener로 등록 — disposers에서 자동 해제
+  // (수동 removeEventListener 블록 제거)
+  game.iceKeyHandler = null;
+  game.boostKeyHandler = null;
   game.boost = null;
   game.joystick?.unmount();
   game.joystick = null;

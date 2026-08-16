@@ -65,8 +65,15 @@ export class SoundManager {
 
   setEnabled(on: boolean): void {
     this.enabled = on;
-    if (this.musicGain && this.ctx) {
+    // 2026-08-16: BUG 픽스 — sfxGain도 같이 토글
+    // - 기존: musicGain만 mute → 사운드 OFF 눌러도 발자국/부스터/얼림/OUT 다 들림
+    // - 픽스: sfxGain도 같이 0으로 → 일관성 있는 사운드 OFF
+    if (!this.ctx) return;
+    if (this.musicGain) {
       this.musicGain.gain.setTargetAtTime(on ? 0.15 : 0, this.ctx.currentTime, 0.05);
+    }
+    if (this.sfxGain) {
+      this.sfxGain.gain.setTargetAtTime(on ? 0.7 : 0, this.ctx.currentTime, 0.05);
     }
   }
 
