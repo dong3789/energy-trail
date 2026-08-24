@@ -1723,15 +1723,67 @@ input.invalid {
   align-items: center;
   justify-content: center;
   line-height: 1;
+  --shot-ready: 100;
   transition:
     transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 0.12s ease;
+    box-shadow 0.12s ease,
+    filter 0.15s ease;
+}
+.shot-cd-pie {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+  background: conic-gradient(
+    from -90deg,
+    transparent 0 calc(var(--shot-ready) * 1%),
+    rgba(42, 26, 74, 0.72) 0
+  );
+}
+.shot-fire-face {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.shot-fire-btn.cooling {
+  filter: grayscale(0.35) brightness(0.92);
+  cursor: default;
+}
+.shot-fire-btn.cooling .shot-fire-hint {
+  font-variant-numeric: tabular-nums;
+}
+.shot-fire-btn.ready-pop {
+  animation: shotReadyPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes shotReadyPop {
+  0% {
+    box-shadow:
+      0 6px 0 #2a1a4a,
+      0 0 0 #fff44a00;
+  }
+  45% {
+    box-shadow:
+      0 8px 0 #2a1a4a,
+      0 0 22px #fff44acc;
+  }
+  100% {
+    box-shadow:
+      0 6px 0 #2a1a4a,
+      0 8px 20px rgba(255, 225, 74, 0.45);
+  }
 }
 .shot-fire-btn:active {
   transform: translateY(-50%) scale(0.92);
   box-shadow:
     0 3px 0 #2a1a4a,
     0 4px 10px rgba(255, 225, 74, 0.4);
+}
+.shot-fire-btn:disabled {
+  opacity: 1;
 }
 .shot-fire-hint {
   font-size: 10px;
@@ -4032,6 +4084,9 @@ input.invalid {
 
 .game-canvas-wrap.touch-ui .shot-fire-btn:active {
   transform: scale(0.92);
+}
+.game-canvas-wrap.touch-ui .shot-fire-btn.ready-pop {
+  animation: shotReadyPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 @media (orientation: landscape) {
