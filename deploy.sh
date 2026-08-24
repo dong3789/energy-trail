@@ -55,6 +55,16 @@ docker run -d \
   --label "caddy.reverse_proxy={{upstreams 80}}" \
   energy-trail:latest > /dev/null
 
+log "실시간 방 서버..."
+docker build -q -t energy-trail-ws:latest "$REPO_ROOT/web-prototype/server" > /dev/null
+docker rm -f energy-trail-ws >/dev/null 2>&1 || true
+docker run -d \
+  --name energy-trail-ws \
+  --network proxy_net \
+  --restart unless-stopped \
+  -e PORT=8791 \
+  energy-trail-ws:latest > /dev/null
+
 # 5) 컨테이너 헬스체크
 sleep 2
 if docker ps --filter name=energy-trail --filter status=running --format '{{.Names}}' | grep -q energy-trail; then

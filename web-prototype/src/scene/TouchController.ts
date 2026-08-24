@@ -4,7 +4,7 @@
 // - 조이스틱을 떼면 자동으로 0으로 복귀
 // - PlayerController.setInput(forward, right)를 호출해 직접 입력 주입
 
-import { GAME } from '../config';
+import { LOOK_STICK, lookAxesFromDelta } from '../lib/look-stick';
 
 export interface JoystickOptions {
   host: HTMLElement; // 조이스틱을 붙일 부모 (보통 game-canvas-wrap)
@@ -37,8 +37,8 @@ export class Joystick {
   constructor(opts: JoystickOptions) {
     this.host = opts.host;
     this.onChange = opts.onChange;
-    this.baseRadius = opts.baseRadius ?? 64;
-    this.knobRadius = opts.knobRadius ?? 32;
+    this.baseRadius = opts.baseRadius ?? 48;
+    this.knobRadius = opts.knobRadius ?? 22;
     this.marginBottom = opts.marginBottom ?? 24;
     this.marginLeft = opts.marginLeft ?? 24;
   }
@@ -55,7 +55,6 @@ export class Joystick {
 
     // Pointer Events
     base.addEventListener('pointerdown', this.onPointerDown);
-    // pointermove/up/cancel은 window에 등록 (조이스틱 밖에서도 추적)
   }
 
   unmount(): void {
@@ -82,19 +81,20 @@ export class Joystick {
   }
 
   private onPointerDown = (e: PointerEvent): void => {
-    if (this.activePointerId !== null) return; // 이미 활성
+    if (this.activePointerId !== null) return;
     this.activePointerId = e.pointerId;
-    if (this.baseEl) {
-      this.baseEl.setPointerCapture(e.pointerId);
-      this.baseEl.addEventListener('pointermove', this.onPointerMove);
-      this.baseEl.addEventListener('pointerup', this.onPointerUp);
-      this.baseEl.addEventListener('pointercancel', this.onPointerUp);
-    }
-    // 베이스 중심을 터치 위치로 (또는 베이스 중앙 고정 — 모바일에선 중앙 고정 직관적)
     if (this.baseEl) {
       const rect = this.baseEl.getBoundingClientRect();
       this.centerX = rect.left + rect.width / 2;
       this.centerY = rect.top + rect.height / 2;
+      try {
+        this.baseEl.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      this.baseEl.addEventListener('pointermove', this.onPointerMove);
+      this.baseEl.addEventListener('pointerup', this.onPointerUp);
+      this.baseEl.addEventListener('pointercancel', this.onPointerUp);
     }
     this.handleMove(e.clientX, e.clientY);
     e.preventDefault();
@@ -163,6 +163,133 @@ export class Joystick {
     if (!this.knobEl) return;
     // 노브는 베이스 중앙 기준 상대 위치
     this.knobEl.style.transform = `translate(calc(-50% + ${px}px), calc(-50% + ${py}px))`;
+  }
+}
+
+export interface LookAxes {
+  yaw: number;
+  pitch: number;
+}
+
+/** Right-thumb look analog: origin at press, displacement drives turn *rate*. */
+export class LookStick {
+  private readonly host: HTMLElement;
+  private readonly maxRadius: number;
+  private zoneEl: HTMLDivElement | null = null;
+  private ghostEl: HTMLDivElement | null = null;
+  private knobEl: HTMLDivElement | null = null;
+  private activePointerId: number | null = null;
+  private originX = 0;
+  private originY = 0;
+  private yaw = 0;
+  private pitch = 0;
+
+  constructor(opts: { host: HTMLElement; maxRadius?: number }) {
+    this.host = opts.host;
+    this.maxRadius = opts.maxRadius ?? LOOK_STICK.maxRadius;
+  }
+
+  mount(): void {
+    const zone = document.createElement('div');
+    zone.className = 'look-zone';
+    const hint = document.createElement('div');
+    hint.className = 'look-hint';
+    hint.setAttribute('aria-hidden', 'true');
+    const ghost = document.createElement('div');
+    ghost.className = 'look-ghost';
+    const knob = document.createElement('div');
+    knob.className = 'look-ghost-knob';
+    ghost.appendChild(knob);
+    zone.appendChild(hint);
+    zone.appendChild(ghost);
+    this.host.appendChild(zone);
+    this.zoneEl = zone;
+    this.ghostEl = ghost;
+    this.knobEl = knob;
+    zone.addEventListener('pointerdown', this.onPointerDown);
+  }
+
+  unmount(): void {
+    this.detachPointer();
+    if (this.zoneEl) {
+      this.zoneEl.removeEventListener('pointerdown', this.onPointerDown);
+      this.zoneEl.parentElement?.removeChild(this.zoneEl);
+    }
+    this.zoneEl = null;
+    this.ghostEl = null;
+    this.knobEl = null;
+    this.yaw = 0;
+    this.pitch = 0;
+  }
+
+  getAxes(): LookAxes {
+    return { yaw: this.yaw, pitch: this.pitch };
+  }
+
+  private onPointerDown = (e: PointerEvent): void => {
+    if (this.activePointerId !== null) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    this.activePointerId = e.pointerId;
+    this.originX = e.clientX;
+    this.originY = e.clientY;
+    if (this.zoneEl) {
+      try {
+        this.zoneEl.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      this.zoneEl.addEventListener('pointermove', this.onPointerMove);
+      this.zoneEl.addEventListener('pointerup', this.onPointerUp);
+      this.zoneEl.addEventListener('pointercancel', this.onPointerUp);
+      this.zoneEl.classList.add('is-looking');
+    }
+    this.placeGhost(e.clientX, e.clientY);
+    this.handleMove(e.clientX, e.clientY);
+    e.preventDefault();
+  };
+
+  private onPointerMove = (e: PointerEvent): void => {
+    if (e.pointerId !== this.activePointerId) return;
+    this.handleMove(e.clientX, e.clientY);
+  };
+
+  private onPointerUp = (e: PointerEvent): void => {
+    if (e.pointerId !== this.activePointerId) return;
+    this.detachPointer();
+    this.activePointerId = null;
+    this.yaw = 0;
+    this.pitch = 0;
+    if (this.ghostEl) this.ghostEl.classList.remove('active');
+    if (this.zoneEl) this.zoneEl.classList.remove('is-looking');
+    if (this.knobEl) this.knobEl.style.transform = 'translate(-50%, -50%)';
+  };
+
+  private detachPointer(): void {
+    if (this.zoneEl) {
+      this.zoneEl.removeEventListener('pointermove', this.onPointerMove);
+      this.zoneEl.removeEventListener('pointerup', this.onPointerUp);
+      this.zoneEl.removeEventListener('pointercancel', this.onPointerUp);
+    }
+  }
+
+  private placeGhost(clientX: number, clientY: number): void {
+    if (!this.ghostEl || !this.zoneEl) return;
+    const rect = this.zoneEl.getBoundingClientRect();
+    this.ghostEl.style.left = `${clientX - rect.left}px`;
+    this.ghostEl.style.top = `${clientY - rect.top}px`;
+    this.ghostEl.classList.add('active');
+  }
+
+  private handleMove(clientX: number, clientY: number): void {
+    const dx = clientX - this.originX;
+    const dy = clientY - this.originY;
+    const axes = lookAxesFromDelta(dx, dy, this.maxRadius);
+    this.yaw = axes.yaw;
+    this.pitch = axes.pitch;
+    if (!this.knobEl) return;
+    const dist = Math.hypot(dx, dy);
+    const k = dist > this.maxRadius && dist > 1e-6 ? this.maxRadius / dist : 1;
+    this.knobEl.style.transform = `translate(calc(-50% + ${dx * k}px), calc(-50% + ${dy * k}px))`;
   }
 }
 

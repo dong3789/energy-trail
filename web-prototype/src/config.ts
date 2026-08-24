@@ -37,7 +37,7 @@ export interface MapDef {
 export const MAPS: Record<MapId, MapDef> = {
   park: {
     id: 'park',
-    name: '블록버튼',
+    name: '블록가든',
     description: '파스텔 잔디와 큐브. 입문자 추천.',
     difficulty: 1,
     previewColorA: 0xb4e4f4,
@@ -59,7 +59,7 @@ export const MAPS: Record<MapId, MapDef> = {
   },
   school: {
     id: 'school',
-    name: '도라에몽',
+    name: '캔디팩토리',
     description: '동그란 공장과 굴뚝. 시야 중간.',
     difficulty: 2,
     previewColorA: 0xffb3d9,
@@ -420,7 +420,8 @@ export const GAME = {
   runnerWinEscapeCount: 1, // 1명이라도 탈출
 
   // 라운드
-  roundSeconds: 150,
+  roundSeconds: 75,
+  trailGoal: 8,
 
   // === Phase B: 이동 / 속도 3단계 / 자국 ===
   baseSpeed: 4.5, // m/s, 1차 = 4.5. SPEED_TIERS.multiplier와 곱해 실제 속도 결정
@@ -440,7 +441,7 @@ export const GAME = {
   invulnerabilitySeconds: 2.0,
   // 2026-08-15 v3: 0.9 → 1.1 — 두 캡슐 반경 합(0.45+0.63=1.08)보다 살짝 크게
   // → 캡슐이 닿기 직전에 OUT 발동
-  taggerContactDistance: 1.1,
+  taggerContactDistance: 1.65,
   exitHoldSeconds: 1.0,
 
   // 술래 AI (Phase B: 단순 패트롤 — Phase C에서 추적 AI로 확장)
@@ -452,29 +453,35 @@ export const GAME = {
   // - 흡수 부스트(1.4×) 시: 도망자 8.82 m/s — 차이 1.36배 → 도망자 도주 가능
   // - 플레이어 술래도 같은 1.9배 적용 (이전엔 1.0배로 AI보다 느렸음)
   taggerPatrolSpeedMultiplier: 1.9,
-  // 2026-08-15 v8: 키 리바인드 — Space = 부스터 (요청)
-  // - Space (탭) = 부스터 발동 (B 대안)
-  // - B = 부스터 (기존, 유지)
-  // - 클릭(왼쪽) = 즉시 사격
-  // - F = 조준 사격 (홀딩→조준선→떼면 발사) — 도망자 F=얼림과 충돌 → Shift로 변경
-  shotKey: 'KeyF', // F = 사격 (홀딩 조준)
-  shotClickKey: 'Pointer0', // 마우스 왼쪽 = 즉시 사격
-  shotRange: 20,
-  shotCooldown: 1.5,
-  shotSpeed: 30,
-  shotRadius: 0.4,
-  shotColor: 0xff3a3a,
+  // AI 술래만 별도. 플레이어 술래(1.9)는 그물로 잡고, AI는 몸통 추적이라 이 속도면 도망자가 즉시 죽는다.
+  // 4.5 × 1.4 × 1.45 = 9.14 m/s (스프린트 8.1보다 조금 빠름)
+  taggerAiChaseMultiplier: 1.45,
+  taggerStartGraceSeconds: 4.0,
+  taggerChaseSwitchMargin: 5.0,
+  taggerDetectRange: 16,
+  taggerLoseRange: 22,
+  taggerCatchStunSeconds: 2.0,
+  // 그물망 — 얇은 포박줄 대신 넓고 느린 원반. 날아가며 벌어지고 착지 후 잠깐 바닥에 남음
+  // F 홀딩=조준, 떼면 발사 / 클릭·모바일 버튼=즉시 투척
+  shotKey: 'KeyF',
+  shotClickKey: 'Pointer0',
+  shotRange: 12,
+  shotCooldown: 2.2,
+  shotSpeed: 16,
+  shotRadius: 1.15,
+  shotNetRadiusMax: 2.7,
+  shotNetZoneSeconds: 1.1,
+  shotColor: 0xffe14a,
   taggerPatrolRadiusMin: 4.0,
   taggerPatrolRadiusMax: 10.0,
   taggerPatrolTurnInterval: 2.5,
 
   // 2026-08-09 v4: 얼림 (Ice) 시스템 — 도망자가 술래를 잠시 동결
   // 2026-08-15 v5: 1.0 → 1.2 — 도망자가 멀리서도 얼림 발동 가능
-  iceRange: 1.2,
-  // v6: 2.5 → 3.0 — 도망자가 얼림 동안 더 멀리 도망 가능 (16m 밖으로)
-  iceDuration: 3.0,
-  // v6: 15.0 → 12.0 — 라운드당 사용 횟수 12~13회 (도망자 유리)
-  iceCooldown: 12.0,
+  iceRange: 3.4,
+  iceDuration: 2.4,
+  iceCooldown: 10.0,
+  iceCatchGraceSeconds: 0.8,
   iceTaggerTint: 0x66e0ff, // 술래 동결 시 색상 (얼음 시안)
 
   // 2026-08-09 v5: 술래 크기 + 부스터 시스템
@@ -503,4 +510,15 @@ export const GAME = {
   // 2026-08-09 v6: 장애물 자성 — 도망자(AI)가 장애물 근처에서 미세하게 끌어당겨짐
   obstacleMagnetism: 0.6, // 마진 내 인력 계수 (m/s² 스케일, m 단위 가속)
   obstacleMagnetismRange: 0.6, // 마진 대비 추가 자성 범위 (마진 + 이만큼 = 자성 영향 반경)
+
+  itemPickupRadius: 1.15,
+  itemSpawnCount: 5,
+  itemRespawnSeconds: 14,
+  itemJellyDuration: 3.0,
+  itemJellySpeedMul: 1.55,
+  itemSmokeDuration: 5.5,
+  itemSmokeForgetSeconds: 1.4,
+  itemStickyDuration: 5.0,
+  itemStickyRadius: 2.4,
+  itemStickySlowMul: 0.45,
 } as const;
