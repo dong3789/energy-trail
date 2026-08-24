@@ -1740,7 +1740,6 @@ function renderGame(): void {
   type RoundState = 'countdown' | 'playing' | 'ended';
   let roundState: RoundState = 'countdown';
   let roundTime: number = GAME.roundSeconds; // 남은 시간 (초)
-  let escapeHoldTime = 0; // 출구 위 유지 시간
   const roundStats = { absorbed: 0, outCount: 0, iceUsed: 0, boostUsed: 0, startedAt: 0 };
   const paintTrailScore = (): void => {
     if (roundScoreEl) roundScoreEl.textContent = `${roundStats.absorbed} / ${GAME.trailGoal}`;
@@ -2771,10 +2770,8 @@ function renderGame(): void {
   };
 
   // 2026-08-15: OUT 슬로모 + 흑백 (드라마틱 연출)
-  let slowmoTime = 0; // 남은 슬로모 시간 (초)
-  let slowmoActive = false;
+  const slowmoActive = false;
   const SLOWMO_FACTOR = 0.25; // 0.25x 속도
-  const SLOWMO_FALLBACK_TIME = 0.7;
 
   // === OUT 오버레이 (Fall Guys 카툰) ===
   const outOverlay = document.createElement('div');

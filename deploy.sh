@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # EnergyTrail — Mac mini 배포 스크립트
-# 사용법: ./deploy.sh
-# - git pull → npm ci → npm run build → docker 재시작
-# - 변경 없으면 그냥 종료
+# 사용법: ./deploy.sh v0.2.0
+# - 릴리스 태그를 checkout → npm ci → npm run build → docker 재시작
+# - main 커밋만으로는 배포하지 않음
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -15,20 +15,21 @@ ok() { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m⚠\033[0m %s\n" "$*"; }
 err() { printf "\033[1;31m✗\033[0m %s\n" "$*" >&2; }
 
-# 1) 원격 변경 확인
-log "원격 변경 확인..."
-git fetch --quiet origin main
-LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse origin/main)
-if [ "$LOCAL" = "$REMOTE" ]; then
-  ok "변경 없음 — 배포 스킵 ($LOCAL)"
-  exit 0
+TAG="${1:-}"
+if [ -z "$TAG" ]; then
+  err "사용법: ./deploy.sh <tag>  (예: ./deploy.sh v0.2.0)"
+  exit 1
 fi
-ok "새 커밋 감지: $(git log --oneline $LOCAL..$REMOTE | head -3)"
 
-# 2) 코드 업데이트
-log "git pull..."
-git pull --ff-only origin main
+# 1) 릴리스 태그 checkout
+log "태그 $TAG 가져오는 중..."
+git fetch --quiet --tags origin
+if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+  err "태그 없음: $TAG"
+  exit 1
+fi
+git checkout --detach "refs/tags/$TAG"
+ok "checkout $TAG ($(git rev-parse --short HEAD))"
 
 # 3) 의존성 + 빌드
 log "의존성 설치..."
@@ -84,4 +85,6 @@ else
   docker exec caddy caddy reload --config /etc/caddy/Caddyfile --address localhost:2019 > /dev/null 2>&1 || true
 fi
 
-ok "배포 완료 — https://trail.yndl.dev (Cloudflare 터널 라우팅 추가 후 활성화)"
+git checkout main >/dev/null 2>&1 || true
+
+ok "배포 완료 — $TAG → https://trail.yndl.dev"
