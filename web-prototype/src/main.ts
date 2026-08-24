@@ -1219,8 +1219,20 @@ function renderGame(): void {
     shotState.zone = null;
   }
 
+  function shotCanFire(): boolean {
+    return !shotState.active && !shotState.zone && shotState.cooldownLeft <= 0;
+  }
+
+  function shotCharge01(): number {
+    if (shotState.cooldownLeft > 0) {
+      return Math.max(0, Math.min(1, 1 - shotState.cooldownLeft / GAME.shotCooldown));
+    }
+    if (shotState.active || shotState.zone) return 0;
+    return 1;
+  }
+
   function fireShot(): void {
-    if (shotState.active || shotState.cooldownLeft > 0 || shotState.zone) return;
+    if (!shotCanFire()) return;
     shotOriginTmp.copy(selfMesh.position);
     shotState.originY = selfMesh.position.y + PLAYER.height * 0.45;
     shotOriginTmp.y = shotState.originY;
@@ -2558,11 +2570,15 @@ function renderGame(): void {
 
   // 모바일 그물 버튼 (술래)
   let shotFireBtn: HTMLButtonElement | null = null;
+  let shotFireHint: HTMLElement | null = null;
+  let shotChargeReady = true;
   if (isTagger && mobileMode) {
     shotFireBtn = document.createElement('button');
     shotFireBtn.type = 'button';
     shotFireBtn.className = 'shot-fire-btn';
-    shotFireBtn.innerHTML = '🕸️<br><span class="shot-fire-hint">그물</span>';
+    shotFireBtn.innerHTML =
+      '<span class="shot-cd-pie" aria-hidden="true"></span><span class="shot-fire-face">🕸️<span class="shot-fire-hint">그물</span></span>';
+    shotFireHint = shotFireBtn.querySelector('.shot-fire-hint');
     shotFireBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2570,6 +2586,17 @@ function renderGame(): void {
       fireShot();
     });
     wrap.appendChild(shotFireBtn);
+  }
+
+  let shotChargeGroup: THREE.Group | null = null;
+  if (isTagger) {
+    shotChargeGroup = createNetVisual(0.7, false);
+    shotChargeGroup.visible = false;
+    ctx.scene.add(shotChargeGroup);
+    game.disposers.push(() => {
+      disposeNetObject(shotChargeGroup);
+      shotChargeGroup = null;
+    });
   }
 
   // 얼림 버튼 (좌하단, 도망자만)
@@ -3290,9 +3317,27 @@ function renderGame(): void {
         if (shotState.zone.timeLeft <= 0) disposeNetZone();
       }
 
+      if (isTagger && shotChargeGroup) {
+        const canFire = shotCanFire();
+        const charge = shotCharge01();
+        shotChargeGroup.visible = !canFire && roundState === 'playing' && !game.out;
+        if (shotChargeGroup.visible) {
+          shotChargeGroup.position.copy(selfMesh.position);
+          shotChargeGroup.position.y = 0.12;
+          shotChargeGroup.scale.setScalar(0.45 + charge * 0.95);
+          shotChargeGroup.rotation.y += dt * (2.2 + charge * 4);
+          shotChargeGroup.traverse((child) => {
+            if (!(child instanceof THREE.Mesh) && !(child instanceof THREE.Line)) return;
+            const mat = child.material as THREE.MeshBasicMaterial | THREE.LineBasicMaterial;
+            if (mat && 'opacity' in mat) mat.opacity = 0.22 + charge * 0.7;
+          });
+        }
+      }
+
       // === OUT 판정 (구버전 — 2026-08-15 v6: 포박줄로 대체되어 제거) ===
     } else {
       trails.update(dt, t);
+      if (shotChargeGroup) shotChargeGroup.visible = false;
     }
 
     // 자국 개수 HUD
@@ -3380,27 +3425,43 @@ function renderGame(): void {
     }
 
     if (shotBar && shotFill && shotStatus) {
+      const charge = shotCharge01();
       if (shotState.active) {
-        const remain = 1 - shotState.traveled / GAME.shotRange;
-        shotFill.style.width = `${remain * 100}%`;
+        shotFill.style.width = `${charge * 100}%`;
         shotFill.classList.remove('critical');
         shotStatus.textContent = '그물 비행';
         shotStatus.className = 'boost-status boosting';
       } else if (shotState.zone) {
-        const ratio = shotState.zone.timeLeft / GAME.shotNetZoneSeconds;
-        shotFill.style.width = `${ratio * 100}%`;
+        shotFill.style.width = `${charge * 100}%`;
         shotStatus.textContent = '그물 펼침';
         shotStatus.className = 'boost-status boosting';
-      } else if (shotState.cooldownLeft > 0) {
-        const ratio = 1 - shotState.cooldownLeft / GAME.shotCooldown;
-        shotFill.style.width = `${ratio * 100}%`;
-        shotStatus.textContent = `쿨다운 ${shotState.cooldownLeft.toFixed(1)}s`;
+      } else if (!shotCanFire()) {
+        shotFill.style.width = `${charge * 100}%`;
+        shotStatus.textContent = `충전 ${shotState.cooldownLeft.toFixed(1)}s`;
         shotStatus.className = 'boost-status cooldown';
       } else {
         shotFill.style.width = '100%';
         shotStatus.textContent = '준비 (F / 클릭)';
         shotStatus.className = 'boost-status ready';
       }
+    }
+    if (shotFireBtn) {
+      const charge = shotCharge01();
+      const canFire = shotCanFire();
+      shotFireBtn.style.setProperty('--shot-ready', `${Math.round(charge * 100)}`);
+      shotFireBtn.classList.toggle('cooling', !canFire);
+      shotFireBtn.disabled = !canFire || roundState !== 'playing' || game.out;
+      if (shotFireHint) {
+        shotFireHint.textContent = canFire
+          ? '그물'
+          : `${Math.max(0, shotState.cooldownLeft).toFixed(1)}`;
+      }
+      if (canFire && !shotChargeReady) {
+        shotFireBtn.classList.remove('ready-pop');
+        void shotFireBtn.offsetWidth;
+        shotFireBtn.classList.add('ready-pop');
+      }
+      shotChargeReady = canFire;
     }
     if (debugStatus) {
       // v5 디버그: 자기 위치 + 입력 상태 (캔버스에 키가 들어오는지 즉시 확인)
