@@ -152,6 +152,69 @@ describe('AbsorbSystem (자국 흡수 상태머신)', () => {
     });
   });
 
+  describe('자동 시작 (2026-08-25: E 키/탭 불필요)', () => {
+    it('inTrail + 호출 → 자동으로 흡수 시작', () => {
+      // 별도 tryStart() 없이 update 만 호출 → 흡수 시작되어야 함
+      absorb.update(0.016, true, false);
+      expect(absorb.isAbsorbing()).toBe(true);
+      expect(events).toContain('start');
+    });
+
+    it('inTrail=false 면 자동 시작 안 함', () => {
+      absorb.update(0.016, false, false);
+      expect(absorb.isAbsorbing()).toBe(false);
+      expect(events).not.toContain('start');
+    });
+
+    it('얼림 중 (frozen=true) 에는 자동 시작 안 함', () => {
+      absorb.update(0.016, true, true);
+      expect(absorb.isAbsorbing()).toBe(false);
+    });
+
+    it('쿨다운 중에는 자동 시작 안 함', () => {
+      // 1회 완료 → 쿨다운 시작
+      absorb.tryStart();
+      absorb.update(1.0, true, false);
+      expect(absorb.getCooldown()).toBeGreaterThan(0);
+      // 다음 프레임 inTrail 이어도 자동 시작 안 됨
+      absorb.update(0.016, true, false);
+      expect(absorb.isAbsorbing()).toBe(false);
+    });
+
+    it('가속 중 (boostRemaining > 0) 에는 자동 시작 안 함', () => {
+      absorb.tryStart();
+      absorb.update(1.0, true, false);
+      expect(absorb.getBoostRemaining()).toBeGreaterThan(0);
+      absorb.update(0.016, true, false);
+      expect(absorb.isAbsorbing()).toBe(false);
+    });
+
+    it('자국 위에서 1초 자동 진행 → 완료 (1초 hold 만으로 흡수)', () => {
+      // 외부에서 자국 위치/강도 세팅 (실제 main.ts 흐름)
+      absorb.setLastTrailPosition(1, 1);
+      absorb.setStrengthConsumed(0.9);
+      // 별도 tryStart() 없이 매 프레임 inTrail=true 만 전달
+      absorb.update(1.0, true, false);
+      expect(absorb.isAbsorbing()).toBe(false);
+      expect(absorb.isInvulnerable()).toBe(true);
+      expect(absorb.getBoostRemaining()).toBeCloseTo(GAME.boostSeconds, 5);
+      expect(events.some((e) => e.startsWith('start'))).toBe(true);
+      expect(events.some((e) => e.startsWith('complete'))).toBe(true);
+      expect(events.some((e) => e.startsWith('boost-start'))).toBe(true);
+    });
+
+    it('자국에서 빠지면 cancel (자동 시작도 막힘)', () => {
+      absorb.update(0.016, true, false); // 자동 시작
+      expect(absorb.isAbsorbing()).toBe(true);
+      absorb.update(0.3, false, false); // 빠짐
+      expect(absorb.isAbsorbing()).toBe(false);
+      expect(events).toContain('cancel');
+      // 다시 자국 위에 서도 쿨다운 0.6s 동안은 재시작 안 됨
+      absorb.update(0.016, true, false);
+      expect(absorb.isAbsorbing()).toBe(false);
+    });
+  });
+
   describe('getBoostSpeedMultiplier()', () => {
     it('가속 중 → 1.4×strengthConsumed', () => {
       absorb.setStrengthConsumed(0.8);

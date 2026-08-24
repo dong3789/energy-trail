@@ -1412,7 +1412,7 @@ function renderGame(): void {
     <div class="game-debug-row muted">${
       profile.role === 'tagger'
         ? 'Space/B 부스터 · F 홀딩: 조준 → 떼면 그물 · 클릭: 즉시 그물 · V: 카메라 모드'
-        : 'E 흡수 · F 얼림 · V: 카메라 모드'
+        : 'F 얼림 · V: 카메라 모드 · (자국: 가까이 가면 자동 흡수)'
     }</div>
     <div class="game-debug-row muted game-debug-mode">카메라: ${
       camState.mode === 'chase' ? '추적' : '자유'
@@ -1503,7 +1503,7 @@ function renderGame(): void {
             ${
               profile.role === 'tagger'
                 ? 'Space/B 부스터 · F 그물 · Shift 대시 · V 카메라'
-                : 'E 흡수 · F 얼림 · Shift 대시 · V 카메라'
+                : 'F 얼림 · Shift 대시 · V 카메라 · (자국: 가까이 가면 자동 흡수)'
             }
           </span>
         </label>
@@ -1569,10 +1569,11 @@ function renderGame(): void {
   };
   addTrackedListener(canvasHost, 'keydown', debugToggleHandler);
 
-  // 2026-08-15 v4: 액션 프롬프트 (화면 중앙 하단) — 맥락별 안내
-  // - 자국 위: E 흡수 + 진행률
+  // 2026-08-15 v4 → 2026-08-25: 액션 프롬프트 (화면 중앙 하단) — 맥락별 안내
+  // - 자국 흡수는 자동 (프롬프트 불필요, absorb HUD 가 진행률 표시)
   // - 얼림 사거리 내: F 얼림 (도망자)
   // - 그물 사거리 내: F 그물 (술래)
+  // - 부스터 준비: Space (술래)
   // - 첫 3초만 표시 (이후 숨김 — best practice: progressive disclosure)
   const actionPrompt = document.createElement('div');
   actionPrompt.className = 'action-prompt';
@@ -2430,34 +2431,8 @@ function renderGame(): void {
     }
   };
 
-  // 2026-08-15: E 키로 자국 흡수 (도망자만) — 자국 위에 있을 때 1초 유지
-  // 흡수 시작은 키다운, 진행 중에는 cancel 감지만
-  const absorbKeyHandler = (e: KeyboardEvent): void => {
-    if (e.code !== 'KeyE') return;
-    if (isTagger) return; // 술래는 흡수 사용 불가
-    if (game.out) return;
-    if (e.type === 'keydown') {
-      // 자국 위에 있는지 확인
-      const query = trails.queryNearest(selfMesh.position, 1.5);
-      if (query.hit) {
-        absorb.setLastTrailPosition(query.position!.x, query.position!.z);
-        absorb.setStrengthConsumed(query.strength);
-        if (absorb.tryStart()) {
-          player.setAbsorbing(true);
-          sound.playAbsorbStart();
-        }
-      }
-    } else if (e.type === 'keyup') {
-      // 키 떼면 즉시 취소 (단, 이미 완료된 경우는 무시)
-      if (absorb.isAbsorbing()) {
-        absorb.reset();
-        player.setAbsorbing(false);
-        sound.playAbsorbCancel();
-      }
-    }
-  };
-  addTrackedListener(canvasHost, 'keydown', absorbKeyHandler);
-  addTrackedListener(canvasHost, 'keyup', absorbKeyHandler);
+  // 2026-08-25: 자동 흡수 — E 키/탭 불필요. 자국 반경 내 진입 시 AbsorbSystem.update() 가
+  //              내부에서 자동으로 tryStart() 함. 진행 중 자국에서 빠지면 기존 cancel 로직.
   function distVecToTagger(): number {
     const dx = selfMesh.position.x - taggerMesh.position.x;
     const dz = selfMesh.position.z - taggerMesh.position.z;
@@ -2660,39 +2635,19 @@ function renderGame(): void {
   let absorbLabel: HTMLElement | null = null;
   if (!isTagger) {
     const absorbWrap = document.createElement('div');
-    absorbWrap.className = 'absorb-hud';
+    absorbWrap.className = 'absorb-hud absorb-hud-auto';
     absorbWrap.innerHTML = `
       <div class="absorb-bar"><div class="absorb-bar-fill" id="absorb-bar-fill"></div></div>
-      <div class="absorb-label" id="absorb-label">${mobileMode ? '흡수' : '자국 흡수 (E)'}</div>
+      <div class="absorb-label" id="absorb-label">자국 흡수 (자동)</div>
     `;
     wrap.appendChild(absorbWrap);
     absorbHud = absorbWrap;
     absorbProgress = absorbWrap.querySelector<HTMLElement>('#absorb-bar-fill');
     absorbLabel = absorbWrap.querySelector<HTMLElement>('#absorb-label');
+    // 2026-08-25: 흡수 자동 시작 — 터치 리스너 제거. 진행률 링은 시각 피드백용으로 유지.
     if (mobileMode) {
-      absorbWrap.style.pointerEvents = 'auto';
-      const startAbsorbTouch = (e: Event): void => {
-        e.preventDefault();
-        e.stopPropagation();
-        const query = trails.queryNearest(selfMesh.position, 1.5);
-        if (!query.hit) return;
-        absorb.setLastTrailPosition(query.position!.x, query.position!.z);
-        absorb.setStrengthConsumed(query.strength);
-        if (absorb.tryStart()) {
-          player.setAbsorbing(true);
-          sound.playAbsorbStart();
-        }
-      };
-      const stopAbsorbTouch = (): void => {
-        if (absorb.isAbsorbing()) {
-          absorb.reset();
-          player.setAbsorbing(false);
-          sound.playAbsorbCancel();
-        }
-      };
-      addTrackedListener(absorbWrap, 'pointerdown', startAbsorbTouch);
-      addTrackedListener(absorbWrap, 'pointerup', stopAbsorbTouch);
-      addTrackedListener(absorbWrap, 'pointercancel', stopAbsorbTouch);
+      // 데코 — pointer-events 없음 (탭으로 발동 안 됨, 자동 시작)
+      absorbWrap.style.pointerEvents = 'none';
     }
   }
   // v6: 모바일 가상 조이스틱 (터치 환경 / 좁은 너비에서 자동 표시)
@@ -2959,7 +2914,7 @@ function renderGame(): void {
         if (elapsed < 4.5) {
           const tipText = isTagger
             ? 'WASD 이동 · F 그물 · Space 부스터 · Shift 대시'
-            : 'WASD 이동 · E 자국 흡수 · F 술래 동결 · Shift 대시';
+            : 'WASD 이동 · F 술래 동결 · Shift 대시 · (자국: 가까이 가면 자동 흡수)';
           showActionPrompt(tipText, '🎮', '#2a1a4a');
         }
       }
@@ -2972,15 +2927,11 @@ function renderGame(): void {
         }
       }
 
-      // 2026-08-15 v4: 액션 프롬프트 — 맥락별 안내 (3초 표시)
-      // - 도망자: 자국 위 / 얼림 사거리 내
+      // 2026-08-15 v4 → 2026-08-25: 액션 프롬프트 — 자국 흡수는 자동이므로 제거
+      // - 도망자: 얼림 사거리 내 (F) — 자국 흡수는 자동
       // - 술래: 그물 사거리 내 / 부스터 준비
       if (!isTagger) {
-        // 자국 위 (E 흡수)
-        const q = trails.queryNearest(selfMesh.position, 1.5);
-        if (q.hit && !absorb.isAbsorbing() && absorb.getCooldown() <= 0) {
-          showActionPrompt('자국 흡수', 'E', '#54f0b1');
-        } else if (ice.isReady() && taggerMesh !== selfMesh) {
+        if (ice.isReady() && taggerMesh !== selfMesh) {
           const dist = distVecToTagger();
           if (dist <= GAME.iceRange) {
             showActionPrompt('술래 동결', 'F', '#66e0ff');
@@ -3018,11 +2969,16 @@ function renderGame(): void {
     }
 
     if (!game.out) {
-      // 2026-08-15: 흡수 시스템 업데이트 (E 키 1초 유지)
-      // 흡수 중 매 프레임: 자국 위에 있는지 확인 + progress 갱신
+      // 2026-08-25: 자동 흡수 — 자국 반경 내 진입 시 자동으로 흡수 시작 (E 키/탭 불필요)
+      // - 흡수 중 매 프레임: 자국 위에 있는지 확인 + progress 갱신
+      // - 흡수 중 아닐 때 inTrail 이면 AbsorbSystem.update() 가 내부에서 tryStart() 호출
       if (absorb && !isTagger) {
-        const inTrail = trails.queryNearest(selfMesh.position, 1.5).hit;
-        const absorbEvent = absorb.update(dt, inTrail, ice.isActive() || player.isFrozen());
+        const query = trails.queryNearest(selfMesh.position, GAME.absorbRadius);
+        if (query.hit && query.position) {
+          absorb.setLastTrailPosition(query.position.x, query.position.z);
+          absorb.setStrengthConsumed(query.strength);
+        }
+        const absorbEvent = absorb.update(dt, query.hit, ice.isActive() || player.isFrozen());
         if (absorbEvent === 'cancel') {
           player.setAbsorbing(false);
           sound.playAbsorbCancel();
@@ -3524,11 +3480,12 @@ function renderGame(): void {
           : `재사용 대기 ${absorb.getCooldown().toFixed(1)}초`;
       } else {
         absorbHud.classList.remove('active', 'boost');
-        const query = trails.queryNearest(selfMesh.position, 1.5);
+        // 2026-08-25: 자동 흡수 — 라벨도 "자국 위에 서세요" 안내로 단순화
+        const query = trails.queryNearest(selfMesh.position, GAME.absorbRadius);
         if (query.hit) {
-          absorbLabel.textContent = mobileMode ? '흡수' : '자국 흡수 (E) — 준비';
+          absorbLabel.textContent = mobileMode ? '흡수 중' : '자국 위에 서면 자동 흡수';
         } else {
-          absorbLabel.textContent = mobileMode ? '흡수' : '자국 흡수 (E) — 자국 위에 서세요';
+          absorbLabel.textContent = mobileMode ? '대기' : '자국 위로 이동하세요';
         }
       }
     }

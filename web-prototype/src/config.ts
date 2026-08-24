@@ -428,13 +428,19 @@ export const GAME = {
   rotationSpeed: 12, // rad/s, 캐릭터가 이동 방향으로 회전하는 속도
 
   // 자국 (Phase B: 1차 = 자국 생성/소멸만, 흡수는 Phase B+ 확장)
-  trailInterval: 0.18, // m 이동마다 1개 생성
-  trailLifetime: 6.0, // 자국 자연 소멸 시간 (초)
-  trailMaxCount: 80, // 최대 자국 개수 (초과 시 오래된 자국부터 제거)
-  trailPoolSize: 100, // 자국 오브젝트 풀 초기 크기
+  // 2026-08-25: 자국을 더 길고/오래 — 도망자가 주울 수 있도록
+  //  - interval 0.18→0.12: 4.5m/s 술래가 약 37개/초 → 더 연속적인 경로
+  //  - lifetime 6→12: 복귀 경로까지 1바퀴 둘러도 자국 남아있도록
+  //  - maxCount 80→120: lifetime 2배 늘었으므로 풀 용량 보정
+  trailInterval: 0.12, // m 이동마다 1개 생성
+  trailLifetime: 12.0, // 자국 자연 소멸 시간 (초)
+  trailMaxCount: 120, // 최대 자국 개수 (초과 시 오래된 자국부터 제거)
+  trailPoolSize: 140, // 자국 오브젝트 풀 초기 크기
 
   // 흡수 (Phase B+ 확장 자리)
+  // 2026-08-25: 자동 수집 — E 키/탭 불필요, 자국 반경 내 1초 정지 시 자동 완료
   absorbSeconds: 1.0,
+  absorbRadius: 2.0, // 픽업 반경 (m) — 기존 하드코딩 1.5 → 2.0 으로 완화
   boostSeconds: 4.0,
   // 2026-08-15 v5: 1.6 → 1.4 — 도망자 너무 빠르면 술래 못 잡음
   absorbedSpeedMultiplier: 1.4,

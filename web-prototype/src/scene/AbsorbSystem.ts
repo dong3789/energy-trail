@@ -52,8 +52,23 @@ export class AbsorbSystem {
    * @param dt 프레임 시간 (초)
    * @param inTrail 자국 위에 있는지 여부
    * @param frozen 얼림 중인지 (얼림 중엔 흡수 불가/취소)
+   *
+   * 2026-08-25: 자동 시작 — inTrail 이면 흡수 중이 아닐 때 자동으로 tryStart().
+   *              자동 시작을 흡수 진행 로직 *앞에* 두어 같은 프레임에 progress 도 누적되도록 함.
+   *              호출자가 매 프레임 setLastTrailPosition / setStrengthConsumed 로
+   *              최신 자국 정보를 채워줘야 자동 시작 시 올바른 값으로 시작됨.
    */
   update(dt: number, inTrail: boolean, frozen: boolean): AbsorbEvent {
+    // 자동 시작: 자국 위에 있고, 쿨다운 0, 부스트 중 아님, 얼림 아님
+    if (
+      !this.absorbing &&
+      inTrail &&
+      !frozen &&
+      this.cooldown <= 0 &&
+      this.boostRemaining <= 0
+    ) {
+      this.tryStart();
+    }
     // 흡수 중
     if (this.absorbing) {
       if (!inTrail || frozen) {
