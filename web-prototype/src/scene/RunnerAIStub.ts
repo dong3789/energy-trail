@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { GAME, SPEED_TIERS, type ObstacleSpec } from '../config';
+import { moveCircle } from '../lib/collision';
 
 export interface RunnerAIStubOptions {
   mesh: THREE.Mesh;
@@ -28,10 +29,15 @@ export class RunnerAIStub {
 
   // 2026-08-15: 4.0 → 5.0 — 술래(2.4×=15.1 m/s)에 비해 AI 도망자가 너무 쉽게 잡힘
   // → 회피 거리 늘려서 도망 시작 일찍
-  private readonly fleeDistance = 5.0;
+  private readonly fleeDistance = 9.0;
   // 2026-08-15 v2: 1.2× → 1.4× — AI 도망자가 술래(2.4×=15.1 m/s)한테 너무 쉽게 잡힘
   // 2026-08-15 v8: 술래 1.9배 — AI 도망자 8.8 m/s는 1.36배 느림 → 도주 가능
   private readonly baseSpeed = GAME.baseSpeed * SPEED_TIERS.run.multiplier * 1.4;
+  private extraSpeedMul = 1.0;
+
+  setExtraSpeedMul(mul: number): void {
+    this.extraSpeedMul = Math.max(0.2, mul);
+  }
 
   // v9: 갇힘 감지 — 일정 시간 움직이지 않으면 헤딩 강제 변경
   private lastPosition = new THREE.Vector3();
@@ -94,7 +100,7 @@ export class RunnerAIStub {
 
     const next = this.tmpVec
       .copy(this.mesh.position)
-      .addScaledVector(this.heading, this.baseSpeed * dt);
+      .addScaledVector(this.heading, this.baseSpeed * this.extraSpeedMul * dt);
     // 자성 추가 (X/Z 각각)
     next.x += magnetX;
     next.z += magnetZ;
@@ -108,26 +114,40 @@ export class RunnerAIStub {
 
     const oldX = this.mesh.position.x;
     const oldZ = this.mesh.position.z;
-    this.mesh.position.x = this.resolveAxis(this.mesh.position.x, next.x, true);
-    this.mesh.position.z = this.resolveAxis(this.mesh.position.z, next.z, false);
+    const resolved = moveCircle(
+      this.mesh.position.x,
+      this.mesh.position.z,
+      next.x - this.mesh.position.x,
+      next.z - this.mesh.position.z,
+      0.6,
+      this.obstacles,
+      { halfWidth: this.mapHalfWidth, halfDepth: this.mapHalfDepth },
+    );
+    this.mesh.position.x = resolved.x;
+    this.mesh.position.z = resolved.z;
 
-    // v9: 갇힘 감지 — 1초 이상 안 움직이면 헤딩 강제 변경
     const moved = this.mesh.position.x - oldX + (this.mesh.position.z - oldZ);
     if (Math.abs(moved) < 0.01) {
       this.stuckTimer += dt;
       if (this.stuckTimer > this.STUCK_THRESHOLD) {
-        // 8방향 시도하며 clear한 방향 찾기
         for (let i = 0; i < 8; i++) {
           const testAngle = (i / 8) * Math.PI * 2;
-          const testDir = new THREE.Vector3(Math.cos(testAngle), 0, Math.sin(testAngle));
-          const testNext = this.mesh.position.clone().addScaledVector(testDir, this.baseSpeed * dt);
+          const test = moveCircle(
+            this.mesh.position.x,
+            this.mesh.position.z,
+            Math.cos(testAngle) * this.baseSpeed * dt,
+            Math.sin(testAngle) * this.baseSpeed * dt,
+            0.6,
+            this.obstacles,
+            { halfWidth: this.mapHalfWidth, halfDepth: this.mapHalfDepth },
+          );
           if (
-            this.resolveAxis(this.mesh.position.x, testNext.x, true) !== this.mesh.position.x ||
-            this.resolveAxis(this.mesh.position.z, testNext.z, false) !== this.mesh.position.z
+            Math.abs(test.x - this.mesh.position.x) > 1e-4 ||
+            Math.abs(test.z - this.mesh.position.z) > 1e-4
           ) {
-            this.heading.copy(testDir);
+            this.heading.set(Math.cos(testAngle), 0, Math.sin(testAngle));
             this.stuckTimer = 0;
-            this.turnTimer = 0.5; // 다음 헤딩 변경도 빠르게
+            this.turnTimer = 0.5;
             break;
           }
         }
@@ -145,37 +165,5 @@ export class RunnerAIStub {
   private pickNewHeading(): void {
     const angle = Math.random() * Math.PI * 2;
     this.heading.set(Math.cos(angle), 0, Math.sin(angle));
-  }
-
-  private resolveAxis(current: number, target: number, isX: boolean): number {
-    const half = isX ? this.mapHalfWidth : this.mapHalfDepth;
-    const margin = 0.6;
-    let clamped = Math.max(-half + margin, Math.min(half - margin, target));
-    for (const o of this.obstacles) {
-      const oxMin = o.x - o.width / 2 - margin;
-      const oxMax = o.x + o.width / 2 + margin;
-      const ozMin = o.z - o.depth / 2 - margin;
-      const ozMax = o.z + o.depth / 2 + margin;
-      if (isX) {
-        if (
-          clamped >= oxMin &&
-          clamped <= oxMax &&
-          this.mesh.position.z >= ozMin &&
-          this.mesh.position.z <= ozMax
-        ) {
-          clamped = current;
-        }
-      } else {
-        if (
-          clamped >= ozMin &&
-          clamped <= ozMax &&
-          this.mesh.position.x >= oxMin &&
-          this.mesh.position.x <= oxMax
-        ) {
-          clamped = current;
-        }
-      }
-    }
-    return clamped;
   }
 }

@@ -54,9 +54,9 @@ describe('config invariants', () => {
       expect(taggerSpeed).toBeGreaterThan(runnerMaxSpeed);
     });
 
-    it('taggerContactDistance가 캡슐 두 개 반경 합보다 크거나 같음 (닿기 전에 OUT)', () => {
+    it('taggerContactDistance가 캡슐 두 개 반경 합보다 커서 코너에 몰아도 OUT', () => {
       const minContact = PLAYER.radius + PLAYER.radius * GAME.taggerScale;
-      expect(GAME.taggerContactDistance).toBeGreaterThanOrEqual(minContact - 0.01);
+      expect(GAME.taggerContactDistance).toBeGreaterThan(minContact + 0.3);
     });
 
     it('부스터는 사이클 4회 후 stall (boostStallThreshold > boostFatiguePerUse * 3)', () => {
@@ -67,9 +67,46 @@ describe('config invariants', () => {
       expect(GAME.roundSeconds).toBeGreaterThan(0);
     });
 
+    it('자국 목표치가 양수 (도망자 승리 조건)', () => {
+      expect(GAME.trailGoal).toBeGreaterThan(0);
+    });
+
     it('iceDuration + iceCooldown 합이 라운드 시간보다 작음 (라운드당 여러 번 사용 가능)', () => {
       const cycle = GAME.iceDuration + GAME.iceCooldown;
       expect(cycle).toBeLessThan(GAME.roundSeconds);
+    });
+
+    it('얼림 사거리는 접촉 잡기보다 충분히 크다', () => {
+      expect(GAME.iceRange).toBeGreaterThan(GAME.taggerContactDistance * 2);
+    });
+
+    it('AI 술래 감지 범위는 놓치는 거리보다 짧다', () => {
+      expect(GAME.taggerDetectRange).toBeGreaterThan(8);
+      expect(GAME.taggerLoseRange).toBeGreaterThan(GAME.taggerDetectRange);
+    });
+
+    it('AI 술래는 스프린트보다 조금 빠르고 플레이어 술래보다는 느리다', () => {
+      const runnerSprint = GAME.baseSpeed * SPEED_TIERS.sprint.multiplier;
+      const runnerRun = GAME.baseSpeed * SPEED_TIERS.run.multiplier;
+      const ai = GAME.baseSpeed * SPEED_TIERS.run.multiplier * GAME.taggerAiChaseMultiplier;
+      const playerTagger =
+        GAME.baseSpeed * SPEED_TIERS.run.multiplier * GAME.taggerPatrolSpeedMultiplier;
+      expect(ai).toBeGreaterThan(runnerRun);
+      expect(ai).toBeGreaterThan(runnerSprint);
+      expect(ai).toBeLessThan(playerTagger);
+    });
+
+    it('연막은 몇 초 유지되고 끝난 뒤 술래가 바로 못 잡는다', () => {
+      expect(GAME.itemSmokeDuration).toBeGreaterThan(4);
+      expect(GAME.itemSmokeForgetSeconds).toBeGreaterThan(0.5);
+    });
+
+    it('그물망은 발사 후 벌어지고 땅에 잠깐 남는다', () => {
+      expect(GAME.shotNetRadiusMax).toBeGreaterThan(GAME.shotRadius);
+      expect(GAME.shotRadius).toBeGreaterThan(PLAYER.radius);
+      expect(GAME.shotNetZoneSeconds).toBeGreaterThan(0);
+      expect(GAME.shotCooldown).toBeGreaterThan(GAME.shotNetZoneSeconds);
+      expect(GAME.shotRange / GAME.shotSpeed).toBeGreaterThan(0.4);
     });
   });
 

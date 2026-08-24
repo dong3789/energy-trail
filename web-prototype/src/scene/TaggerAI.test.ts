@@ -46,6 +46,19 @@ describe('TaggerAI (술래 AI 추격)', () => {
       ai.update(0.5);
       expect(mesh.position.z).toBeGreaterThan(0);
     });
+
+    it('setTarget으로 더 가까운 도망자로 목표를 바꾼다', () => {
+      const other = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.5, 1, 4, 8),
+        new THREE.MeshBasicMaterial(),
+      );
+      other.position.set(0, 0, -3);
+      target.position.set(20, 0, 0);
+      mesh.position.set(0, 0, 0);
+      ai.setTarget(other);
+      ai.update(0.4);
+      expect(mesh.position.z).toBeLessThan(0);
+    });
   });
 
   describe('회전 (회전 공식 정합성)', () => {
@@ -78,6 +91,17 @@ describe('TaggerAI (술래 AI 추격)', () => {
       // slerp로 인해 정확하진 않지만, π/2 와 π/2 사이 (오른쪽) 영역
       expect(euler.y).toBeGreaterThan(-Math.PI);
       expect(euler.y).toBeLessThan(0);
+    });
+  });
+
+  describe('breakChase()', () => {
+    it('목표를 끊고 대상 반대쪽으로 방향을 튼다', () => {
+      target.position.set(5, 0, 0);
+      mesh.position.set(0, 0, 0);
+      ai.setTarget(target);
+      ai.breakChase(target.position);
+      ai.update(0.4);
+      expect(mesh.position.x).toBeLessThan(0);
     });
   });
 

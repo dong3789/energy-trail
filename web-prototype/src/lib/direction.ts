@@ -35,3 +35,9 @@ export function shortestAngle(from: number, to: number): { delta: number; abs: n
   const delta = wrapAngle(to - from);
   return { delta, abs: Math.abs(delta) };
 }
+
+/** Chase camera yaw: same convention as camera yaw 0 = facing -Z. Null if barely moving. */
+export function chaseYawFromMovement(dx: number, dz: number, minDist = 0.05): number | null {
+  if (dx * dx + dz * dz < minDist * minDist) return null;
+  return rotationFromVelocity(dx, dz);
+}

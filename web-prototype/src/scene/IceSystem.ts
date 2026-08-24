@@ -1,7 +1,7 @@
 // 2026-08-09 v4: 얼림 (Ice) 시스템 — 도망자가 술래를 잠시 동결
 // - 발동 가능 거리 (GAME.iceRange) 이내일 때만 활성
 // - 쿨다운 (GAME.iceCooldown) 동안 재사용 불가
-// - 발동 시 술래는 frozen (정지 + 자국 안 남김), 도망자도 frozen (자기 못 움직임)
+// - 발동 시 술래만 frozen. 도망자는 그 동안 도망친다.
 // - 지속시간 (GAME.iceDuration) 후 자동 해제
 //
 // 의존성: PlayerController.setFrozen(bool), TaggerAI.setFrozen(bool)
@@ -23,6 +23,7 @@ export class IceSystem {
   private active = false;
   private remaining = 0;
   private cooldown = 0; // 0이면 즉시 사용 가능
+  private catchGrace = 0;
 
   constructor(opts: IceSystemOptions) {
     this.setPlayerFrozen = opts.setPlayerFrozen;
@@ -38,7 +39,7 @@ export class IceSystem {
 
     this.active = true;
     this.remaining = GAME.iceDuration;
-    this.setPlayerFrozen(true);
+    this.setPlayerFrozen(false);
     this.setTaggerFrozen(true);
     if (this.onTaggerVisual) this.onTaggerVisual(true);
     return true;
@@ -51,12 +52,14 @@ export class IceSystem {
         this.active = false;
         this.remaining = 0;
         this.cooldown = GAME.iceCooldown;
+        this.catchGrace = GAME.iceCatchGraceSeconds;
         this.setPlayerFrozen(false);
         this.setTaggerFrozen(false);
         if (this.onTaggerVisual) this.onTaggerVisual(false);
       }
-    } else if (this.cooldown > 0) {
-      this.cooldown = Math.max(0, this.cooldown - dt);
+    } else {
+      if (this.catchGrace > 0) this.catchGrace = Math.max(0, this.catchGrace - dt);
+      if (this.cooldown > 0) this.cooldown = Math.max(0, this.cooldown - dt);
     }
   }
 
@@ -70,6 +73,7 @@ export class IceSystem {
     this.active = false;
     this.remaining = 0;
     this.cooldown = 0;
+    this.catchGrace = 0;
   }
 
   /** UI 표시용 */
@@ -84,5 +88,8 @@ export class IceSystem {
   }
   isReady(): boolean {
     return !this.active && this.cooldown <= 0;
+  }
+  blocksCatch(): boolean {
+    return this.active || this.catchGrace > 0;
   }
 }

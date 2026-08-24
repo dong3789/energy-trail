@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { GAME, SPEED_TIERS, type SpeedTier, type ObstacleSpec } from '../config';
+import { moveCircle } from '../lib/collision';
 
 export interface PlayerInputState {
   forward: number; // -1..1 (W=1, S=-1)
@@ -123,11 +124,15 @@ export class PlayerController {
 
   // 2026-08-15: 흡수 후 가속 (boostRemaining 동안 적용)
   private boostSpeedMul = 1.0;
+  private extraSpeedMul = 1.0;
   setBoostSpeedMultiplier(mul: number): void {
     this.boostSpeedMul = Math.max(1.0, mul);
   }
   getBoostSpeedMultiplier(): number {
     return this.boostSpeedMul;
+  }
+  setExtraSpeedMul(mul: number): void {
+    this.extraSpeedMul = Math.max(0.2, mul);
   }
 
   // v6: 터치/외부 입력 직접 주입 (조이스틱 등 가상 입력용)
@@ -180,7 +185,13 @@ export class PlayerController {
     const tierMult = SPEED_TIERS[this.speedTier].multiplier;
     const dashMul = this.dashTimeLeft > 0 ? this.DASH_MULTIPLIER : 1.0;
     // v8: 술래일 때 speedMultiplier(1.9) 적용 — AI 술래와 같은 속도
-    const speed = baseSpeed * tierMult * this.boostSpeedMul * dashMul * this.speedMultiplier;
+    const speed =
+      baseSpeed *
+      tierMult *
+      this.boostSpeedMul *
+      dashMul *
+      this.speedMultiplier *
+      this.extraSpeedMul;
 
     // 입력 × basis 로 실제 속도 계산
     // - forward basis: 캐릭터가 향하는 방향 (월드)
@@ -193,14 +204,8 @@ export class PlayerController {
       this.velocity.normalize().multiplyScalar(speed);
     }
 
-    // 이동 적용 (X, Z만)
     const next = this.tmpVec.copy(this.mesh.position).addScaledVector(this.velocity, dt);
 
-    // 회전 (이동 방향으로) — 캐릭터가 진행 방향을 보게
-    // 2026-08-15 v29: atan2 버그 수정 — (-velocity.x, -velocity.z) 사용
-    // - 기존: atan2(velocity.x, velocity.z) → 캐릭터가 진행 반대 방향 봄
-    // - 새 공식: atan2(-velocity.x, -velocity.z) → 캐릭터가 진행 방향 봄
-    // - 검증: velocity=(0,0,-1) [south] → atan2(0,1)=0 → identity → -Z 방향 ✓
     if (this.velocity.lengthSq() > 1e-4) {
       const fwdComp = this.velocity.dot(this.moveForward);
       const isStrafe = Math.abs(fwdComp) < 0.3;
@@ -210,9 +215,17 @@ export class PlayerController {
       this.mesh.quaternion.slerp(this.tmpQuat, Math.min(1, rotSpeed * dt));
     }
 
-    // X, Z 분리 충돌 처리
-    this.mesh.position.x = this.resolveAxis(this.mesh.position.x, next.x, true);
-    this.mesh.position.z = this.resolveAxis(this.mesh.position.z, next.z, false);
+    const resolved = moveCircle(
+      this.mesh.position.x,
+      this.mesh.position.z,
+      next.x - this.mesh.position.x,
+      next.z - this.mesh.position.z,
+      this.collisionMargin,
+      this.obstacles,
+      { halfWidth: this.mapHalfWidth, halfDepth: this.mapHalfDepth },
+    );
+    this.mesh.position.x = resolved.x;
+    this.mesh.position.z = resolved.z;
   }
 
   // 2026-08-15 v3: 대시 (Shift 키) — 0.3s 짧은 돌진
@@ -231,41 +244,6 @@ export class PlayerController {
   }
   getDashCooldownMax(): number {
     return this.DASH_COOLDOWN;
-  }
-
-  private resolveAxis(current: number, target: number, isX: boolean): number {
-    const half = isX ? this.mapHalfWidth : this.mapHalfDepth;
-    const margin = this.collisionMargin;
-    // 맵 경계 클램프
-    let clamped = Math.max(-half + margin, Math.min(half - margin, target));
-    // 장애물 AABB 충돌 — 캡슐을 점으로 가정 (반경 마진 포함)
-    for (const o of this.obstacles) {
-      const oxMin = o.x - o.width / 2 - margin;
-      const oxMax = o.x + o.width / 2 + margin;
-      const ozMin = o.z - o.depth / 2 - margin;
-      const ozMax = o.z + o.depth / 2 + margin;
-      if (isX) {
-        if (
-          clamped >= oxMin &&
-          clamped <= oxMax &&
-          this.mesh.position.z >= ozMin &&
-          this.mesh.position.z <= ozMax
-        ) {
-          // 충돌: 현재 X 유지
-          clamped = current;
-        }
-      } else {
-        if (
-          clamped >= ozMin &&
-          clamped <= ozMax &&
-          this.mesh.position.x >= oxMin &&
-          this.mesh.position.x <= oxMax
-        ) {
-          clamped = current;
-        }
-      }
-    }
-    return clamped;
   }
 
   private onKeyDown(e: KeyboardEvent): void {

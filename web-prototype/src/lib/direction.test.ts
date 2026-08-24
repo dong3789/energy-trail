@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rotationFromVelocity, wrapAngle, shortestAngle } from './direction';
+import { rotationFromVelocity, wrapAngle, shortestAngle, chaseYawFromMovement } from './direction';
 
 describe('direction', () => {
   describe('rotationFromVelocity', () => {
@@ -84,6 +84,20 @@ describe('direction', () => {
       const r2 = shortestAngle(0, (3 * Math.PI) / 2);
       expect(r2.abs).toBeCloseTo(Math.PI / 2, 5);
       expect(r2.delta).toBeLessThan(0); // 음수 = 최단이 반대 방향
+    });
+  });
+
+  describe('chaseYawFromMovement', () => {
+    it('미세 이동은 null (시작 떨림 방지)', () => {
+      expect(chaseYawFromMovement(0.01, 0.01)).toBeNull();
+    });
+
+    it('카메라 yaw 0과 같은 -Z 진행은 yaw 0', () => {
+      expect(chaseYawFromMovement(0, -1)).toBeCloseTo(0, 5);
+    });
+
+    it('+Z 진행은 ±π (카메라가 뒤를 봄)', () => {
+      expect(Math.abs(chaseYawFromMovement(0, 1) ?? 0)).toBeCloseTo(Math.PI, 5);
     });
   });
 });

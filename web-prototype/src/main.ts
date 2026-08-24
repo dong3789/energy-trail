@@ -20,12 +20,41 @@ import { TrailEmitter } from './scene/TrailEmitter';
 import { RunnerAIStub } from './scene/RunnerAIStub';
 import { IceSystem } from './scene/IceSystem';
 import { BoostSystem } from './scene/BoostSystem';
-import { Joystick, isMobileLike } from './scene/TouchController';
+import { Joystick, LookStick, isMobileLike } from './scene/TouchController';
 import { addCharacterFeatures } from './scene/CharacterFactory';
 import { DustSystem } from './scene/DustSystem';
 import { SoundManager } from './scene/SoundManager';
 import { AbsorbSystem } from './scene/AbsorbSystem';
+import { ItemField } from './scene/ItemField';
+import { ITEM_META, type ItemKind } from './lib/items';
 import { escapeHtml } from './lib/html-escape';
+import { countdownFromElapsed, firstCountdownPaint, effectiveElapsedMs } from './lib/countdown';
+import { attachWorldLabel } from './lib/follow-label';
+import { chaseYawFromMovement, shortestAngle, wrapAngle } from './lib/direction';
+import { lookDeltaFromAxes } from './lib/look-stick';
+import { retryScreenForEntry, shouldTeardownGame, type MatchEntryMode } from './lib/match-flow';
+import {
+  canEnterWithCode,
+  isCompleteRoomCode,
+  lookupRoom,
+  normalizeRoomCode,
+  pruneRooms,
+  upsertRoom,
+  type RoomListing,
+} from './lib/room-code';
+import { moveCircle } from './lib/collision';
+import { contactsInRange, netCatchRadius, pickStickyPoint, withinDistance } from './lib/chase';
+import { matchSpawns } from './lib/spawn-layout';
+import { NetClient, wsUrlFromLocation } from './lib/net';
+import { judgeTrailRound } from './lib/round-rules';
+import {
+  assignRoles,
+  buildSoloSeats,
+  clampSoloAiCount,
+  WISH_LABEL,
+  type AssignedRole,
+  type RoleWish,
+} from './lib/assign-roles';
 
 type Screen = 'intro' | 'login' | 'character' | 'role' | 'map-select' | 'lobby' | 'room' | 'game';
 type CharacterId = 'runner-cyan' | 'runner-pink' | 'runner-yellow' | 'runner-purple';
@@ -35,7 +64,7 @@ interface Profile {
   nickname: string;
   characterId: CharacterId;
   role: Role;
-  // 2026-08-15: 맵 선택
+  roleWish: RoleWish;
   mapId: MapId;
 }
 
@@ -57,6 +86,7 @@ interface GameState {
   boost: BoostSystem | null;
   boostKeyHandler: ((e: KeyboardEvent) => void) | null;
   joystick: Joystick | null;
+  lookStick: LookStick | null;
   dust: DustSystem | null; // 2026-08-15: 발밑 먼지 파티클
   speedlines: HTMLElement | null; // 2026-08-15: 부스터 스피드 라인 오버레이
   outFlash: HTMLElement | null; // 2026-08-15: OUT 빨간 비네트 플래시
@@ -81,8 +111,7 @@ interface GameState {
 
 // 2026-08-09 v2: 캐릭터 식별용 머리 위 라벨 (캔버스 → Sprite). 카메라 오비팅과 무관하게 항상 정면.
 function addPlayerLabel(
-  scene: THREE.Scene,
-  anchor: THREE.Vector3,
+  mesh: THREE.Object3D,
   text: string,
   colorHex: number,
   offsetY: number,
@@ -94,8 +123,6 @@ function addPlayerLabel(
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   // 2026-08-15 v34: Fall Guys 카툰 라벨 — 흰색 둥근 캡슐 + 두꺼운 검은 테두리 + 노란 그림자
-  const hex = colorHex.toString(16);
-  const cssColor = `#${('000000' + hex).slice(-6)}`;
   // 노란 그림자 (오프셋)
   ctx.fillStyle = '#fff44a';
   const radius = 28;
@@ -173,9 +200,8 @@ function addPlayerLabel(
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(2.4, 0.84, 1); // 320:112 비율
-  sprite.position.set(anchor.x, anchor.y + offsetY, anchor.z);
   sprite.renderOrder = 999;
-  scene.add(sprite);
+  attachWorldLabel(sprite, mesh, offsetY);
 }
 
 // Phase B: 속도 버튼 active 상태 갱신 + HUD 텍스트
@@ -210,10 +236,73 @@ const profile: Profile = {
   nickname: '',
   characterId: 'runner-cyan',
   role: 'runner',
+  roleWish: 'random',
   mapId: 'park',
 };
 let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
+let roomJoined = true;
+let matchEntry: MatchEntryMode = 'solo';
+let net: NetClient | null = null;
+
+async function ensureNet(): Promise<NetClient | null> {
+  if (net?.connected) return net;
+  const client = new NetClient();
+  const ok = await client.connect(wsUrlFromLocation(window.location));
+  if (!ok) {
+    net = null;
+    return null;
+  }
+  net = client;
+  return client;
+}
+
+function netHello(): void {
+  net?.hello({
+    name: profile.nickname,
+    char: profile.characterId,
+    wish: profile.roleWish,
+    map: profile.mapId,
+  });
+}
+const ROOM_STORE_KEY = 'energy-trail-rooms-v1';
+
+function readPublishedRooms(): RoomListing[] {
+  try {
+    const raw = localStorage.getItem(ROOM_STORE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return pruneRooms(parsed as RoomListing[], Date.now());
+  } catch {
+    return [];
+  }
+}
+
+function writePublishedRooms(list: RoomListing[]): void {
+  try {
+    localStorage.setItem(ROOM_STORE_KEY, JSON.stringify(list));
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function publishCurrentRoom(): void {
+  if (!isCompleteRoomCode(roomCode)) return;
+  writePublishedRooms(
+    upsertRoom(readPublishedRooms(), {
+      code: roomCode,
+      host: profile.nickname,
+      mapId: profile.mapId,
+      createdAt: Date.now(),
+    }),
+  );
+}
+let soloAiCount = 3;
+let matchRoster: Array<{ id: string; role: AssignedRole }> = [
+  { id: 'self', role: 'runner' },
+  { id: 'ai-0', role: 'tagger' },
+];
 const game: GameState = {
   ctx: null,
   stopLoop: null,
@@ -232,6 +321,7 @@ const game: GameState = {
   boost: null,
   boostKeyHandler: null,
   joystick: null,
+  lookStick: null,
   dust: null,
   speedlines: null,
   outFlash: null,
@@ -266,12 +356,10 @@ function trackTimeout(callback: () => void, ms: number): number {
 }
 
 function setScreen(next: Screen): void {
-  // 게임 화면을 떠날 때 Three.js 자원 정리
-  if (screen === 'game' && next !== 'game') {
+  if (shouldTeardownGame(screen, next)) {
     try {
       teardownGame();
     } catch (err) {
-      // Pass 8.3: teardown 실패는 메모리 누수 정도이므로 다음 setScreen 에서 재시도
       console.error('[setScreen] teardownGame threw:', err);
     }
   }
@@ -287,10 +375,22 @@ function setScreen(next: Screen): void {
       try {
         render();
       } catch {
-        // 로비 렌더도 실패하면 더 이상 복구 불가 — 콘솔에 로그만 남기고 중단
+        /* lobby render also failed */
       }
     }
   }
+}
+
+function leaveToLobby(): void {
+  net?.close();
+  net = null;
+  roomJoined = matchEntry !== 'room';
+  setScreen('lobby');
+}
+
+function restartMatch(): void {
+  if (matchEntry === 'room') roomJoined = true;
+  setScreen(retryScreenForEntry(matchEntry));
 }
 
 function button(label: string, action: () => void, className = ''): HTMLButtonElement {
@@ -349,7 +449,7 @@ function renderLogin(): void {
   const content = document.createElement('section');
   content.className = 'screen screen-login';
   content.innerHTML = `
-    <div class="login-eyebrow">STEP 1 / 2</div>
+    <div class="login-eyebrow">입장</div>
     <h1 class="login-title">닉네임 설정</h1>
     <p class="login-sub">시연용 로그인입니다. 닉네임만 입력하면 됩니다.</p>
     <form class="login-form" novalidate>
@@ -397,8 +497,7 @@ function renderLogin(): void {
     // 2026-08-16: nickname은 raw로 저장. innerHTML 보간하는 곳(lobby/room/role/result)에서만 escapeHtml()로 감싸기.
     // (캔버스 3D 라벨에는 escape된 글자가 그대로 그려지는 문제 방지)
     profile.nickname = nickname;
-    // v32: 캐릭터 선택은 room 안으로 — role로 직행
-    setScreen('role');
+    setScreen('lobby');
   };
   nextBtn.addEventListener('click', onNext);
   root.append(content);
@@ -410,75 +509,7 @@ function renderCharacter(): void {
 }
 
 function renderRole(): void {
-  const content = document.createElement('section');
-  content.className = 'screen screen-role';
-  content.innerHTML = `
-    <div class="role-eyebrow">STEP 2 / 2 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
-    <h1 class="role-title">역할 선택</h1>
-    <p class="role-sub">ff팀, 이번 판에서 어떤 역할을 하시겠어요?</p>
-    <div class="role-grid">
-      <button type="button" class="role-card role-tagger" data-role="tagger">
-        <div class="role-figure role-figure-tagger">
-          <div class="role-figure-head"></div>
-          <div class="role-figure-body"></div>
-          <div class="role-figure-eyes"></div>
-        </div>
-        <div class="role-info">
-          <span class="role-badge">TAGGER</span>
-          <span class="role-label">술래</span>
-          <span class="role-desc">도망자를 잡고, 자국으로 교란</span>
-        </div>
-        <ul class="role-abilities">
-          <li><span class="role-ability-key">Space / B</span> 부스터 (1사이클 4회)</li>
-          <li><span class="role-ability-key">F · 클릭</span> 포박줄 사격 (20m)</li>
-          <li><span class="role-ability-key">Shift</span> 짧은 대시</li>
-        </ul>
-        <span class="role-check">✓</span>
-      </button>
-      <button type="button" class="role-card role-runner" data-role="runner">
-        <div class="role-figure role-figure-runner">
-          <div class="role-figure-head"></div>
-          <div class="role-figure-body"></div>
-        </div>
-        <div class="role-info">
-          <span class="role-badge role-badge-runner">RUNNER</span>
-          <span class="role-label">도망자</span>
-          <span class="role-desc">자국을 흡수해 출구로</span>
-        </div>
-        <ul class="role-abilities">
-          <li><span class="role-ability-key">E</span> 자국 흡수 → 4초 가속 + 2초 무적</li>
-          <li><span class="role-ability-key">F</span> 술래 동결 (3초)</li>
-          <li><span class="role-ability-key">Shift</span> 짧은 대시</li>
-        </ul>
-        <span class="role-check">✓</span>
-      </button>
-    </div>
-    <div class="role-actions">
-      <button type="button" class="button ghost role-back">← 닉네임 다시</button>
-      <button type="button" class="button primary role-next">로비로 →</button>
-    </div>
-  `;
-  const grid = content.querySelector('.role-grid');
-  if (!grid) throw new Error('역할 그리드 없음');
-  const applySelection = (role: Role): void => {
-    profile.role = role;
-    grid.querySelectorAll('.role-card').forEach((c) => c.classList.remove('selected'));
-    grid.querySelector(`.role-card[data-role="${role}"]`)?.classList.add('selected');
-  };
-  // 초기 selected
-  grid.querySelector(`.role-card[data-role="${profile.role}"]`)?.classList.add('selected');
-  grid.querySelectorAll<HTMLButtonElement>('.role-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      const r = card.dataset.role as Role;
-      if (r) applySelection(r);
-    });
-  });
-  const backBtn = content.querySelector<HTMLButtonElement>('.role-back');
-  const nextBtn = content.querySelector<HTMLButtonElement>('.role-next');
-  // v32: 캐릭터 단계 제거 → role back = login
-  backBtn?.addEventListener('click', () => setScreen('login'));
-  nextBtn?.addEventListener('click', () => setScreen('lobby'));
-  root.append(content);
+  setScreen('lobby');
 }
 
 function renderMapSelect(): void {
@@ -492,19 +523,19 @@ function renderLobby(): void {
   content.innerHTML = `
     <div class="lobby-eyebrow">로비 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
     <h1 class="lobby-title">로비</h1>
-    <p class="lobby-sub">ff팀, 게임을 시작할 방을 선택하세요.</p>
+    <p class="lobby-sub">방에 들어가면 대기실에서 술래를 정합니다.</p>
     <div class="lobby-summary">
-      <div class="lobby-summary-card">
-        <span class="lobby-summary-label">역할</span>
-        <strong class="lobby-summary-value">${profile.role === 'tagger' ? '🍑 술래' : '💎 도망자'}</strong>
-      </div>
       <div class="lobby-summary-card">
         <span class="lobby-summary-label">닉네임</span>
         <strong class="lobby-summary-value">${escapeHtml(profile.nickname)}</strong>
       </div>
       <div class="lobby-summary-card">
+        <span class="lobby-summary-label">역할</span>
+        <strong class="lobby-summary-value">대기실에서</strong>
+      </div>
+      <div class="lobby-summary-card">
         <span class="lobby-summary-label">모드</span>
-        <strong class="lobby-summary-value">3 모드</strong>
+        <strong class="lobby-summary-value">대기실</strong>
       </div>
     </div>
     <div class="lobby-modes">
@@ -512,7 +543,7 @@ function renderLobby(): void {
         <div class="lobby-mode-icon">🎮</div>
         <div class="lobby-mode-info">
           <span class="lobby-mode-title">혼자 시작</span>
-          <span class="lobby-mode-desc">AI와 즉시 1:1 매치</span>
+          <span class="lobby-mode-desc">대기실에서 AI와 1:1</span>
         </div>
         <span class="lobby-mode-arrow">→</span>
       </button>
@@ -528,13 +559,13 @@ function renderLobby(): void {
         <div class="lobby-mode-icon">⌕</div>
         <div class="lobby-mode-info">
           <span class="lobby-mode-title">방 찾기</span>
-          <span class="lobby-mode-desc">공개 방에 참여</span>
+          <span class="lobby-mode-desc">4자리 코드를 입력해 참여</span>
         </div>
         <span class="lobby-mode-arrow">→</span>
       </button>
     </div>
     <div class="lobby-actions">
-      <button type="button" class="button ghost lobby-back">← 역할 다시</button>
+      <button type="button" class="button ghost lobby-back">← 닉네임 다시</button>
     </div>
   `;
   const soloBtn = content.querySelector<HTMLButtonElement>('.lobby-mode-solo');
@@ -542,20 +573,27 @@ function renderLobby(): void {
   const findBtn = content.querySelector<HTMLButtonElement>('.lobby-mode-find');
   const backBtn = content.querySelector<HTMLButtonElement>('.lobby-back');
   soloBtn?.addEventListener('click', () => {
-    // v31: 혼자 시작 = 솔로, 기본 맵 사용
-    setScreen('game');
+    matchEntry = 'solo';
+    roomMode = 'create';
+    roomJoined = true;
+    roomCode = 'SOLO';
+    setScreen('room');
   });
   createBtn?.addEventListener('click', () => {
+    matchEntry = 'room';
     roomMode = 'create';
-    roomCode = String(Math.floor(1000 + Math.random() * 9000));
+    roomJoined = true;
+    roomCode = '';
     setScreen('room');
   });
   findBtn?.addEventListener('click', () => {
+    matchEntry = 'room';
     roomMode = 'find';
-    roomCode = '----';
+    roomJoined = false;
+    roomCode = '';
     setScreen('room');
   });
-  backBtn?.addEventListener('click', () => setScreen('role'));
+  backBtn?.addEventListener('click', () => setScreen('login'));
   root.append(content);
 }
 
@@ -563,21 +601,69 @@ function renderRoom(): void {
   const content = document.createElement('section');
   content.className = 'screen screen-room';
   const isCreate = roomMode === 'create';
+  const isSolo = matchEntry === 'solo';
+  const needsJoin = roomMode === 'find' && !roomJoined;
   const mapEntries = Object.entries(MAPS);
+  const displayCode = isSolo ? 'SOLO' : roomJoined ? roomCode : '';
   content.innerHTML = `
-    <div class="room-eyebrow">${isCreate ? '방 대기실' : '방 찾기'} · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
-    <h1 class="room-title">${isCreate ? '방 대기실' : '방 찾기'}</h1>
-    <p class="room-sub">${isCreate ? '캐릭터와 맵을 정하고 친구를 기다리세요.' : '캐릭터와 맵을 정하고 시작하세요.'}</p>
+    <div class="room-eyebrow">대기실 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
+    <h1 class="room-title">${needsJoin ? '방 찾기' : '대기실'}</h1>
+    <p class="room-sub">${
+      needsJoin
+        ? '친구가 만든 4자리 코드를 입력하면 대기실로 들어갑니다.'
+        : '술래를 희망하거나 랜덤으로 맡길 수 있어요. 방장이 시작하면 역할이 정해집니다.'
+    }</p>
     <div class="room-hero">
       <div class="room-code-block">
         <span class="room-code-label">ROOM CODE</span>
-        <div class="room-code-digits">
-          ${(isCreate ? roomCode : '----')
+        ${
+          needsJoin
+            ? `<div class="room-code-pin">
+          <input
+            id="room-join-code"
+            class="room-code-entry"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            maxlength="4"
+            autocomplete="one-time-code"
+            enterkeyhint="go"
+            aria-label="방 코드 4자리"
+            placeholder="0000"
+          />
+        </div>
+        <div class="room-keypad" id="room-keypad">
+          ${['1', '2', '3', '4', '5', '6', '7', '8', '9', '←', '0', 'OK']
+            .map((k) => `<button type="button" class="room-key" data-key="${k}">${k}</button>`)
+            .join('')}
+        </div>
+        <p class="room-join-error" id="room-join-error" hidden>4자리 숫자를 입력해 주세요</p>
+        <button type="button" class="button primary room-join" id="room-join">입장</button>
+        <span class="room-code-status">방 코드 4자리를 치고 입장</span>`
+            : `<div class="room-code-digits">
+          ${(displayCode || '----')
             .split('')
             .map((c) => `<span class="room-code-digit">${c}</span>`)
             .join('')}
         </div>
-        <span class="room-code-status">${isCreate ? '대기 중' : '코드 입력 대기'}</span>
+        ${
+          !isSolo && isCreate
+            ? `<button type="button" class="button ghost room-copy" id="room-copy">코드 복사</button>`
+            : ''
+        }
+        <span class="room-code-status">${isSolo ? 'AI 대기' : '실시간 대기'}</span>`
+        }
+      </div>
+    </div>
+    ${
+      needsJoin
+        ? ''
+        : `<div class="waiting-wish-section">
+      <div class="room-character-section-label">이번 판 희망</div>
+      <div class="waiting-wish" id="waiting-wish">
+        <button type="button" class="waiting-wish-btn" data-wish="tagger">술래 할래요</button>
+        <button type="button" class="waiting-wish-btn" data-wish="random">랜덤</button>
+        <button type="button" class="waiting-wish-btn" data-wish="runner">도망자 할래요</button>
       </div>
     </div>
     <div class="room-character-section">
@@ -588,23 +674,30 @@ function renderRoom(): void {
       <div class="room-map-section-label">맵 선택</div>
       <div class="room-map-grid" id="room-map-grid"></div>
     </div>
-    <div class="room-players">
-      <div class="room-player room-player-self">
-        <span class="room-player-dot" id="room-self-dot" style="background:${characters.find((c) => c.id === profile.characterId)?.color ?? '#00e5ff'}"></span>
-        <span class="room-player-name">${escapeHtml(profile.nickname)}</span>
-        <span class="room-player-status ready" id="room-self-status">준비 전</span>
+    ${
+      isSolo
+        ? `<div class="waiting-ai-section">
+      <div class="room-character-section-label">AI 인원</div>
+      <div class="waiting-ai-count">
+        <button type="button" class="waiting-ai-btn" id="ai-minus" aria-label="AI 줄이기">−</button>
+        <strong id="ai-count-label">${soloAiCount}명</strong>
+        <button type="button" class="waiting-ai-btn" id="ai-plus" aria-label="AI 늘리기">+</button>
       </div>
-      <div class="room-player room-player-empty"><span class="room-player-empty-icon">+</span> 빈 자리</div>
-      <div class="room-player room-player-empty"><span class="room-player-empty-icon">+</span> 빈 자리</div>
-      <div class="room-player room-player-empty"><span class="room-player-empty-icon">+</span> 빈 자리</div>
-      <div class="room-player room-player-empty"><span class="room-player-empty-icon">+</span> 빈 자리</div>
-    </div>
+    </div>`
+        : ''
+    }
+    <div class="room-players" id="room-players"></div>`
+    }
     <div class="room-actions">
-      <button type="button" class="button secondary room-ready" id="room-ready-btn">
-        <span class="room-ready-icon">✓</span> 준비하기
-      </button>
-      <button type="button" class="button primary room-start">🎮 게임 시작 →</button>
+      ${needsJoin ? '' : `<button type="button" class="button primary room-start enabled">게임 시작</button>`}
       <button type="button" class="button ghost room-back">← 로비로</button>
+    </div>
+    <div class="role-reveal" id="role-reveal" hidden>
+      <div class="role-reveal-card">
+        <div class="role-reveal-eyebrow">이번 판 당신은</div>
+        <div class="role-reveal-role" id="role-reveal-role">도망자</div>
+        <p class="role-reveal-sub">곧 시작합니다</p>
+      </div>
     </div>
   `;
   // v32: 인라인 캐릭터 선택 — 4개 젤리빈 칩
@@ -629,9 +722,9 @@ function renderRoom(): void {
           .querySelectorAll('.room-character-card')
           .forEach((c) => c.classList.remove('selected'));
         card.classList.add('selected');
-        // 플레이어 리스트의 닷도 즉시 반영
         const selfDot = content.querySelector<HTMLElement>('#room-self-dot');
         if (selfDot) selfDot.style.background = character.color;
+        net?.setChar(character.id);
       });
       characterGrid.append(card);
     }
@@ -664,49 +757,260 @@ function renderRoom(): void {
         profile.mapId = id as MapId;
         mapGrid.querySelectorAll('.room-map-card').forEach((c) => c.classList.remove('selected'));
         card.classList.add('selected');
+        if (!isSolo && isCreate) {
+          publishCurrentRoom();
+          net?.setMap(id);
+        }
       });
       mapGrid.append(card);
     }
   }
-  const readyBtn = content.querySelector<HTMLButtonElement>('#room-ready-btn');
-  const selfStatus = content.querySelector<HTMLElement>('#room-self-status');
-  const startBtn = content.querySelector<HTMLButtonElement>('.room-start');
-  const backBtn = content.querySelector<HTMLButtonElement>('.room-back');
-  let isReady = false;
-  readyBtn?.addEventListener('click', () => {
-    isReady = !isReady;
-    if (selfStatus) {
-      selfStatus.textContent = isReady ? '준비 완료' : '준비 전';
-      selfStatus.classList.toggle('done', isReady);
-    }
-    if (readyBtn) {
-      const icon = readyBtn.querySelector('.room-ready-icon');
-      if (icon) icon.textContent = isReady ? '✕' : '✓';
-      readyBtn.classList.toggle('done', isReady);
-    }
-    // 2026-08-16: 시작 버튼 활성화 상태 동기화
-    if (startBtn) {
-      startBtn.classList.toggle('enabled', isReady);
-      startBtn.disabled = !isReady;
-    }
+  const wishRow = content.querySelector<HTMLElement>('#waiting-wish');
+  const applyWish = (wish: RoleWish): void => {
+    profile.roleWish = wish;
+    wishRow?.querySelectorAll('.waiting-wish-btn').forEach((btn) => {
+      btn.classList.toggle('selected', (btn as HTMLElement).dataset.wish === wish);
+    });
+    const selfWishEl = content.querySelector<HTMLElement>('#room-self-wish');
+    if (selfWishEl) selfWishEl.textContent = WISH_LABEL[wish];
+    net?.setWish(wish);
+  };
+  wishRow?.querySelectorAll<HTMLButtonElement>('.waiting-wish-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const wish = btn.dataset.wish as RoleWish | undefined;
+      if (wish) applyWish(wish);
+    });
   });
-  // 2026-08-16: 시작 게이팅 — 준비 안 했으면 비활성. 솔로 모드는 준비 단계 스킵이 자연스러우나,
-  // 디자인 일관성 + "방장은 항상 준비됨" 룰로 통일.
-  if (startBtn) {
-    startBtn.disabled = true;
-    startBtn.classList.remove('enabled');
-  }
-  startBtn?.addEventListener('click', () => {
-    if (!isReady) {
-      // 비활성 상태지만 강제 클릭 방어
-      startBtn.classList.add('shake');
-      setTimeout(() => startBtn.classList.remove('shake'), 400);
+  const playersEl = content.querySelector<HTMLElement>('#room-players');
+  const aiCountLabel = content.querySelector<HTMLElement>('#ai-count-label');
+  const paintDigits = (code: string): void => {
+    const cells = content.querySelectorAll('.room-code-digit');
+    const chars = (code || '----').split('');
+    cells.forEach((el, i) => {
+      el.textContent = chars[i] ?? '';
+    });
+  };
+  const paintSeats = (): void => {
+    if (!playersEl) return;
+    if (!isSolo && net && net.players.length > 0) {
+      playersEl.innerHTML = net.players
+        .map((p) => {
+          const color = characters.find((c) => c.id === p.char)?.color ?? '#4dd0e1';
+          const wish = WISH_LABEL[(p.wish as RoleWish) || 'random'] ?? p.wish;
+          const you = p.id === net?.id ? ' (나)' : '';
+          const host = p.host ? ' · 방장' : '';
+          return `<div class="room-player ${p.id === net?.id ? 'room-player-self' : ''}">
+        <span class="room-player-dot" style="background:${color}"></span>
+        <span class="room-player-name">${escapeHtml(p.name)}${you}${host}</span>
+        <span class="room-player-wish">${wish}</span>
+      </div>`;
+        })
+        .join('');
       return;
     }
-    setScreen('game');
+    const n = isSolo ? soloAiCount : 1;
+    const selfColor = characters.find((c) => c.id === profile.characterId)?.color ?? '#00e5ff';
+    const ais = Array.from({ length: n }, (_, i) => i);
+    playersEl.innerHTML = `
+      <div class="room-player room-player-self">
+        <span class="room-player-dot" id="room-self-dot" style="background:${selfColor}"></span>
+        <span class="room-player-name">${escapeHtml(profile.nickname)}</span>
+        <span class="room-player-wish" id="room-self-wish">${WISH_LABEL[profile.roleWish]}</span>
+      </div>
+      ${ais
+        .map(
+          (i) => `<div class="room-player">
+        <span class="room-player-dot" style="background:${characters[i % characters.length].color}"></span>
+        <span class="room-player-name">AI ${i + 1}</span>
+        <span class="room-player-wish">랜덤</span>
+      </div>`,
+        )
+        .join('')}
+    `;
+  };
+  paintSeats();
+  applyWish(profile.roleWish);
+  const setAiCount = (n: number): void => {
+    soloAiCount = clampSoloAiCount(n);
+    if (aiCountLabel) aiCountLabel.textContent = `${soloAiCount}명`;
+    paintSeats();
+    applyWish(profile.roleWish);
+  };
+  content.querySelector('#ai-minus')?.addEventListener('click', () => setAiCount(soloAiCount - 1));
+  content.querySelector('#ai-plus')?.addEventListener('click', () => setAiCount(soloAiCount + 1));
+  const startBtn = content.querySelector<HTMLButtonElement>('.room-start');
+  const backBtn = content.querySelector<HTMLButtonElement>('.room-back');
+  const reveal = content.querySelector<HTMLElement>('#role-reveal');
+  const revealRole = content.querySelector<HTMLElement>('#role-reveal-role');
+  const beginMatch = (): void => {
+    if (revealRole) {
+      revealRole.textContent = profile.role === 'tagger' ? '술래' : '도망자';
+      revealRole.classList.toggle('tagger', profile.role === 'tagger');
+    }
+    if (reveal) {
+      reveal.hidden = false;
+      reveal.classList.add('show');
+    }
+    window.setTimeout(() => setScreen('game'), 1400);
+  };
+  startBtn?.addEventListener('click', () => {
+    if (!isSolo && net?.connected) {
+      if (!net.isHost) return;
+      net.start();
+      return;
+    }
+    const seats = buildSoloSeats(isSolo ? soloAiCount : 1, profile.roleWish);
+    const roles = assignRoles(seats);
+    matchRoster = seats.map((s) => ({ id: s.id, role: roles[s.id] }));
+    profile.role = roles.self;
+    beginMatch();
   });
-  backBtn?.addEventListener('click', () => setScreen('lobby'));
+  if (!isSolo && startBtn) {
+    startBtn.textContent = '게임 시작';
+  }
+  const joinInput = content.querySelector<HTMLInputElement>('#room-join-code');
+  const joinBtn = content.querySelector<HTMLButtonElement>('#room-join');
+  const joinError = content.querySelector<HTMLElement>('#room-join-error');
+  const paintJoinValue = (raw: string): void => {
+    if (!joinInput) return;
+    joinInput.value = normalizeRoomCode(raw);
+    if (joinError) joinError.hidden = true;
+    joinInput.classList.remove('invalid');
+  };
+  const tryJoin = (): void => {
+    const entered = canEnterWithCode(joinInput?.value ?? '');
+    if (!entered.ok) {
+      if (joinError) {
+        joinError.hidden = false;
+        joinError.textContent = '4자리 숫자를 입력해 주세요';
+      }
+      joinInput?.classList.add('invalid');
+      joinInput?.focus();
+      return;
+    }
+    void (async () => {
+      const client = await ensureNet();
+      if (!client) {
+        if (joinError) {
+          joinError.hidden = false;
+          joinError.textContent = '서버에 연결하지 못했어요';
+        }
+        return;
+      }
+      netHello();
+      client.onError = (msg) => {
+        if (joinError) {
+          joinError.hidden = false;
+          joinError.textContent = msg;
+        }
+        joinInput?.classList.add('invalid');
+      };
+      client.onRoom = () => {
+        roomCode = client.code;
+        roomJoined = true;
+        profile.mapId = client.map as MapId;
+        setScreen('room');
+      };
+      client.join(entered.code);
+    })();
+  };
+  joinInput?.addEventListener('input', () => {
+    paintJoinValue(joinInput.value);
+    if (isCompleteRoomCode(joinInput.value)) tryJoin();
+  });
+  joinInput?.addEventListener('keyup', () => paintJoinValue(joinInput.value));
+  joinInput?.addEventListener('change', () => paintJoinValue(joinInput.value));
+  joinInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      tryJoin();
+    }
+  });
+  content.querySelectorAll<HTMLButtonElement>('.room-key').forEach((keyBtn) => {
+    keyBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!joinInput) return;
+      const k = keyBtn.dataset.key ?? '';
+      if (k === '←') paintJoinValue(joinInput.value.slice(0, -1));
+      else if (k === 'OK') tryJoin();
+      else {
+        paintJoinValue(joinInput.value + k);
+        if (isCompleteRoomCode(joinInput.value)) tryJoin();
+      }
+    });
+  });
+  joinBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    tryJoin();
+  });
+  const copyBtn = content.querySelector<HTMLButtonElement>('#room-copy');
+  copyBtn?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(roomCode);
+      copyBtn.textContent = '복사됨';
+    } catch {
+      copyBtn.textContent = roomCode;
+    }
+  });
+  backBtn?.addEventListener('click', () => {
+    net?.close();
+    net = null;
+    setScreen('lobby');
+  });
   root.append(content);
+  joinInput?.focus();
+  if (!isSolo && !needsJoin) {
+    void (async () => {
+      const client = await ensureNet();
+      if (!client) {
+        const status = content.querySelector('.room-code-status');
+        if (status) status.textContent = '서버 연결 실패';
+        return;
+      }
+      netHello();
+      client.onRoom = () => {
+        roomCode = client.code;
+        paintDigits(client.code);
+        paintSeats();
+        if (startBtn) {
+          startBtn.textContent = client.isHost ? '게임 시작' : '방장 대기 중';
+          startBtn.disabled = !client.isHost;
+        }
+      };
+      client.onStart = () => {
+        const myRole = client.roles[client.id];
+        if (myRole) profile.role = myRole;
+        profile.mapId = client.map as MapId;
+        matchRoster = client.players.map((p) => ({
+          id: p.id === client.id ? 'self' : p.id,
+          role: (client.roles[p.id] ?? 'runner') as AssignedRole,
+        }));
+        if (client.players.length < 2) {
+          if (profile.role === 'tagger') {
+            matchRoster.push(
+              { id: 'ai-0', role: 'runner' },
+              { id: 'ai-1', role: 'runner' },
+              { id: 'ai-2', role: 'runner' },
+            );
+          } else {
+            matchRoster.push({ id: 'ai-0', role: 'tagger' }, { id: 'ai-1', role: 'runner' });
+          }
+        }
+        beginMatch();
+      };
+      if (isCreate && !client.code) client.create(profile.mapId);
+      else if (roomCode && !client.code) client.join(roomCode);
+      if (client.code) {
+        paintDigits(client.code);
+        paintSeats();
+        if (startBtn) {
+          startBtn.textContent = client.isHost ? '게임 시작' : '방장 대기 중';
+          startBtn.disabled = !client.isHost;
+        }
+      }
+    })();
+  }
 }
 
 // ============================================================
@@ -740,11 +1044,10 @@ function renderGame(): void {
   // - 비워둠 (이전 코드는 제거)
 
   // ============================================================
-  // 2026-08-15: 카메라 자유 회전/줌 (3인칭 표준)
-  // - 데스크탑: 마우스 드래그(좌/우클릭) = 회전, 휠 = 줌
-  // - 모바일: 화면 우측 절반 드래그 = 회전
-  // - 이동은 WASD(데스크탑) / 가상 조이스틱(모바일) 전담
-  // - 카메라 회전/줌은 유지 (되돌아가지 않음)
+  // 카메라: 데스크탑은 마우스 드래그, 모바일은 두손 스틱
+  // - 왼손 고정 조이스틱 = 이동 (카메라 기준)
+  // - 오른손 시점 스틱 = 회전 속도 (드래그 픽셀이 아님 → 휙 안 돎)
+  // - 모바일은 orbit 고정. chase + 카메라상대 이동 = 스핀
   // ============================================================
   const camState = {
     yaw: 0, // 실제 적용값 (lerp으로 target에서 따라옴)
@@ -753,6 +1056,7 @@ function renderGame(): void {
     pitchTarget: 0.3, // 마찬가지
     distance: 7.0,
     dragPointerId: null as number | null,
+    lookSlow: false,
     lastX: 0,
     lastY: 0,
     // 2026-08-15 v3: 카메라 모드 — 'chase'(자동 등 뒤) | 'orbit'(자유 회전)
@@ -775,60 +1079,174 @@ function renderGame(): void {
   // (작을수록 부드럽게 따라옴, 클수록 즉각 반응)
   const CAM_ROT_SMOOTHING = 0.18;
 
-  // 2026-08-15: 술래 포박줄 발사체 시스템
-  // - Space 키로 카메라 facing 방향으로 발사
-  // - 직선, 12m 사거리, 30m/s, 3초 쿨다운
-  // - 도망자에 닿으면 OUT
+  // 술래 그물망: 날아가며 벌어지고, 사거리 끝에서 바닥에 잠깐 남음
   const shotState = {
     active: false,
     position: new THREE.Vector3(),
     direction: new THREE.Vector3(),
     traveled: 0,
-    mesh: null as THREE.Mesh | null,
+    originY: 0.8,
+    mesh: null as THREE.Group | null,
     cooldownLeft: 0,
+    zone: null as {
+      mesh: THREE.Group;
+      x: number;
+      z: number;
+      radius: number;
+      timeLeft: number;
+    } | null,
   };
-  const shotOriginTmp = new THREE.Vector3();
-  const shotHitTmp = new THREE.Vector3();
+
+  function disposeNetObject(obj: THREE.Object3D | null): void {
+    if (!obj) return;
+    ctx.scene.remove(obj);
+    obj.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+        child.geometry.dispose();
+        const mat = child.material;
+        if (Array.isArray(mat)) {
+          for (const m of mat) m.dispose();
+        } else if (mat) {
+          mat.dispose();
+        }
+      }
+    });
+  }
+
+  function createNetVisual(radius: number, grounded: boolean): THREE.Group {
+    const group = new THREE.Group();
+    const color = GAME.shotColor;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(1, grounded ? 0.06 : 0.08, 8, 28),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 28),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: grounded ? 0.34 : 0.22,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    disc.rotation.x = -Math.PI / 2;
+    const inner = new THREE.Mesh(
+      new THREE.TorusGeometry(0.52, 0.04, 6, 20),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7 }),
+    );
+    inner.rotation.x = Math.PI / 2;
+    group.add(disc);
+    group.add(ring);
+    group.add(inner);
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI;
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(Math.cos(a), 0.02, Math.sin(a)),
+        new THREE.Vector3(-Math.cos(a), 0.02, -Math.sin(a)),
+      ]);
+      group.add(
+        new THREE.Line(
+          geo,
+          new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55 }),
+        ),
+      );
+    }
+    group.scale.setScalar(radius);
+    return group;
+  }
+
+  function currentNetRadius(): number {
+    return netCatchRadius(
+      shotState.traveled,
+      GAME.shotRange,
+      GAME.shotRadius,
+      GAME.shotNetRadiusMax,
+    );
+  }
+
+  function markBotCaught(bot: {
+    role: AssignedRole;
+    out: boolean;
+    mesh: THREE.Mesh;
+    material: THREE.MeshStandardMaterial;
+  }): void {
+    if (bot.out || bot.role !== 'runner') return;
+    bot.out = true;
+    bot.material.transparent = true;
+    bot.material.opacity = 0.3;
+    bot.mesh.scale.set(0.6, 0.4, 0.6);
+    roundStats.outCount += 1;
+    triggerShake(0.55);
+    sound.playOut();
+    if (dust) dust.burst(bot.mesh.position, 20, 1.0, 2.0, 2.5, 0.6);
+    const alive =
+      (!isTagger && !game.out ? 1 : 0) + bots.filter((b) => b.role === 'runner' && !b.out).length;
+    if (alive === 0) showResult('tagger', '도망자를 모두 잡았습니다');
+  }
+
+  function tryNetCatchAt(x: number, z: number, radius: number): boolean {
+    const catchR = radius + PLAYER.radius;
+    let caught = false;
+    for (const bot of bots) {
+      if (bot.out || bot.role !== 'runner') continue;
+      if (withinDistance(x, z, bot.mesh.position.x, bot.mesh.position.z, catchR)) {
+        markBotCaught(bot);
+        caught = true;
+      }
+    }
+    return caught;
+  }
+
+  function dropNetZone(x: number, z: number, radius: number): void {
+    disposeShot();
+    const mesh = createNetVisual(radius, true);
+    mesh.position.set(x, 0.08, z);
+    ctx.scene.add(mesh);
+    shotState.zone = { mesh, x, z, radius, timeLeft: GAME.shotNetZoneSeconds };
+  }
+
+  function disposeShot(): void {
+    disposeNetObject(shotState.mesh);
+    shotState.mesh = null;
+    shotState.active = false;
+  }
+
+  function disposeNetZone(): void {
+    if (!shotState.zone) return;
+    disposeNetObject(shotState.zone.mesh);
+    shotState.zone = null;
+  }
 
   function fireShot(): void {
-    if (shotState.active || shotState.cooldownLeft > 0) return;
-    // 발사 시작점: 술래 가슴 높이
+    if (shotState.active || shotState.cooldownLeft > 0 || shotState.zone) return;
     shotOriginTmp.copy(selfMesh.position);
-    shotOriginTmp.y += PLAYER.height * 0.45;
+    shotState.originY = selfMesh.position.y + PLAYER.height * 0.45;
+    shotOriginTmp.y = shotState.originY;
     shotState.position.copy(shotOriginTmp);
-    // 방향: 카메라 facing (월드 -Z + yaw)
     cameraFacing.set(0, 0, -1);
     if (Math.abs(camState.yaw) > 0.0001) {
       const yawQ = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
       cameraFacing.applyQuaternion(yawQ);
     }
+    cameraFacing.y = 0;
     shotState.direction.copy(cameraFacing).normalize();
     shotState.traveled = 0;
-    // 메시 생성
-    const geom = new THREE.SphereGeometry(GAME.shotRadius, 10, 8);
-    const mat = new THREE.MeshBasicMaterial({
-      color: GAME.shotColor,
-      transparent: true,
-      opacity: 0.95,
-    });
-    const mesh = new THREE.Mesh(geom, mat);
+    const mesh = createNetVisual(GAME.shotRadius, false);
     mesh.position.copy(shotState.position);
     ctx.scene.add(mesh);
     shotState.mesh = mesh;
     shotState.active = true;
     shotState.cooldownLeft = GAME.shotCooldown;
-    if (sound) sound.playBoost(); // whoosh 사운드 재활용
+    if (sound) sound.playBoost();
   }
 
-  function disposeShot(): void {
-    if (shotState.mesh) {
-      ctx.scene.remove(shotState.mesh);
-      shotState.mesh.geometry.dispose();
-      (shotState.mesh.material as THREE.Material).dispose();
-      shotState.mesh = null;
-    }
-    shotState.active = false;
-  }
+  const shotOriginTmp = new THREE.Vector3();
+  game.disposers.push(() => {
+    disposeShot();
+    disposeNetZone();
+  });
 
   // 우클릭 컨텍스트 메뉴 차단 (드래그용)
   addTrackedListener(canvasHost, 'contextmenu', (e: Event) => (e as MouseEvent).preventDefault());
@@ -838,15 +1256,15 @@ function renderGame(): void {
   // - orbit: 사용자 자유 회전 (술래 추천 — 정밀한 시점)
   const cameraModeHandler = (e: KeyboardEvent): void => {
     if (e.repeat || e.code !== 'KeyV') return;
+    if (isMobileLike()) return;
     camState.mode = camState.mode === 'chase' ? 'orbit' : 'chase';
     // 토글 시 yaw 동기화
     if (camState.mode === 'chase') {
       // 캐릭터 진행 방향으로 즉시 맞춤
       const dx = selfMesh.position.x - prevPos.x;
       const dz = selfMesh.position.z - prevPos.z;
-      if (Math.hypot(dx, dz) > 0.01) {
-        camState.yawTarget = Math.atan2(dx, dz);
-      }
+      const yaw = chaseYawFromMovement(dx, dz, 0.01);
+      if (yaw !== null) camState.yawTarget = yaw;
     }
     // HUD에 모드 표시
     const modeEl = document.querySelector('.game-debug-mode');
@@ -868,20 +1286,13 @@ function renderGame(): void {
 
   addTrackedListener(canvasHost, 'pointerdown', (e: Event) => {
     const pe = e as PointerEvent;
-    // 데스크탑: 좌/우클릭 모두 카메라 회전
     const isMouse = pe.pointerType === 'mouse' && (pe.button === 0 || pe.button === 2);
-    // 모바일: 화면 우측 절반에서 시작한 단일 손가락 → 카메라 회전
-    const isRightHalf = pe.pointerType === 'touch' && pe.clientX > window.innerWidth / 2;
-    if (isMouse || isRightHalf) {
+    if (isMouse) {
       camState.dragPointerId = pe.pointerId;
       camState.lastX = pe.clientX;
       camState.lastY = pe.clientY;
-      // 2026-08-15 v3: 드래그 시작 시 자동으로 orbit 모드
-      if (camState.mode === 'chase') {
-        camState.mode = 'orbit';
-        const modeEl = document.querySelector('.game-debug-mode');
-        if (modeEl) modeEl.textContent = '카메라: 자유 (V)';
-      }
+      camState.lookSlow = false;
+      camState.mode = 'orbit';
       try {
         canvasHost.setPointerCapture(pe.pointerId);
       } catch {
@@ -896,13 +1307,13 @@ function renderGame(): void {
     if (pe.pointerId !== camState.dragPointerId) return;
     const dx = pe.clientX - camState.lastX;
     const dy = pe.clientY - camState.lastY;
-    // 2026-08-15 v2: target만 갱신, 실제 yaw/pitch는 매 프레임 lerp
-    camState.yawTarget -= dx * CAM_LIMITS.yawSpeed;
+    const lookK = camState.lookSlow ? 0.34 : 1;
+    camState.yawTarget -= dx * CAM_LIMITS.yawSpeed * lookK;
     if (camState.yawTarget > Math.PI) camState.yawTarget -= 2 * Math.PI;
     else if (camState.yawTarget < -Math.PI) camState.yawTarget += 2 * Math.PI;
     camState.pitchTarget = Math.max(
       CAM_LIMITS.pitchMin,
-      Math.min(CAM_LIMITS.pitchMax, camState.pitchTarget + dy * CAM_LIMITS.pitchSpeed),
+      Math.min(CAM_LIMITS.pitchMax, camState.pitchTarget + dy * CAM_LIMITS.pitchSpeed * lookK),
     );
     camState.lastX = pe.clientX;
     camState.lastY = pe.clientY;
@@ -938,7 +1349,14 @@ function renderGame(): void {
   addTrackedListener(wrap, 'pointerdown', (e: Event) => {
     // UI 버튼 클릭은 막지 않음 (정상 클릭 동작)
     const target = e.target as HTMLElement;
-    if (target.closest('button') || target.closest('input')) return;
+    if (
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('.result-overlay') ||
+      target.closest('.out-overlay') ||
+      target.closest('.pause-overlay')
+    )
+      return;
     try {
       canvasHost.focus({ preventScroll: true });
     } catch {
@@ -948,9 +1366,13 @@ function renderGame(): void {
   // v6: mousedown 시 버튼이 focus를 받지 않게 방지 (pointerdown 보완)
   addTrackedListener(wrap, 'mousedown', (e: Event) => {
     const target = e.target as HTMLElement;
+    if (
+      target.closest('.result-overlay') ||
+      target.closest('.out-overlay') ||
+      target.closest('.pause-overlay')
+    )
+      return;
     if (target.closest('button')) {
-      // 버튼이 기본적으로 갖는 mousedown focus 동작은 캔버스가 처리하므로 preventDefault
-      // 단, 버튼 클릭 자체는 살려야 하므로 preventDefault만 호출
       e.preventDefault();
     }
   });
@@ -962,8 +1384,12 @@ function renderGame(): void {
   debug.className = 'game-debug';
   const roleLabel = profile.role === 'tagger' ? '술래' : '도망자';
   const mobileMode = isMobileLike();
+  if (mobileMode) {
+    wrap.classList.add('touch-ui');
+    camState.mode = 'orbit';
+  }
   const camHint = mobileMode
-    ? '조이스틱: 이동 · 우측 드래그: 카메라'
+    ? '왼손 스틱: 이동 · 오른손: 시점'
     : 'WASD 이동 · 마우스 드래그: 카메라 · 휠: 줌';
   debug.innerHTML = `
     <div class="game-debug-title">PHASE B · 단일 플레이어 (${roleLabel})</div>
@@ -973,10 +1399,12 @@ function renderGame(): void {
     <div class="game-debug-row muted">${camHint}</div>
     <div class="game-debug-row muted">${
       profile.role === 'tagger'
-        ? 'Space/B 부스터 · F 홀딩: 조준 → 떼면 발사 · 클릭: 즉시 사격 · V: 카메라 모드'
+        ? 'Space/B 부스터 · F 홀딩: 조준 → 떼면 그물 · 클릭: 즉시 그물 · V: 카메라 모드'
         : 'E 흡수 · F 얼림 · V: 카메라 모드'
     }</div>
-    <div class="game-debug-row muted game-debug-mode">카메라: 추적 (V)</div>
+    <div class="game-debug-row muted game-debug-mode">카메라: ${
+      camState.mode === 'chase' ? '추적' : '자유'
+    }${mobileMode ? '' : ' (V)'}</div>
   `;
   debug.style.display = 'none'; // 기본 숨김
   wrap.appendChild(debug);
@@ -1020,7 +1448,8 @@ function renderGame(): void {
   const statusHud = document.createElement('div');
   statusHud.className = 'status-hud';
   statusHud.innerHTML = `
-    <div class="round-timer" id="round-timer">2:30</div>
+    <div class="round-score" id="round-score">0 / ${GAME.trailGoal}</div>
+    <div class="round-timer" id="round-timer">1:15</div>
     <div class="status-hud-row"><span>자국</span><strong id="status-trails">0</strong></div>
     <div class="status-hud-row muted" id="status-debug">대기 중</div>
   `;
@@ -1029,6 +1458,7 @@ function renderGame(): void {
   game.statusTimer = statusHud.querySelector<HTMLElement>('#status-trails') ?? null;
   game.speedStatus = statusHud.querySelector<HTMLElement>('#status-speed') ?? null;
   const roundTimerEl = statusHud.querySelector<HTMLElement>('#round-timer');
+  const roundScoreEl = statusHud.querySelector<HTMLElement>('#round-score');
   const debugStatus = statusHud.querySelector<HTMLElement>('#status-debug');
 
   // 2026-08-15 v4: 일시정지 메뉴 (best practice: 사용자 자유/통제)
@@ -1060,7 +1490,7 @@ function renderGame(): void {
           <span class="pause-hint muted">
             ${
               profile.role === 'tagger'
-                ? 'Space/B 부스터 · F 사격 · Shift 대시 · V 카메라'
+                ? 'Space/B 부스터 · F 그물 · Shift 대시 · V 카메라'
                 : 'E 흡수 · F 얼림 · Shift 대시 · V 카메라'
             }
           </span>
@@ -1087,11 +1517,11 @@ function renderGame(): void {
   pauseContinueBtn?.addEventListener('click', hidePauseMenu);
   pauseRestartBtn?.addEventListener('click', () => {
     hidePauseMenu();
-    setScreen('room');
+    restartMatch();
   });
   pauseLobbyBtn?.addEventListener('click', () => {
     hidePauseMenu();
-    setScreen('lobby');
+    leaveToLobby();
   });
   pauseSoundChk?.addEventListener('change', () => {
     if (sound) sound.setEnabled(pauseSoundChk.checked);
@@ -1130,7 +1560,7 @@ function renderGame(): void {
   // 2026-08-15 v4: 액션 프롬프트 (화면 중앙 하단) — 맥락별 안내
   // - 자국 위: E 흡수 + 진행률
   // - 얼림 사거리 내: F 얼림 (도망자)
-  // - 사격 사거리 내: F 사격 (술래)
+  // - 그물 사거리 내: F 그물 (술래)
   // - 첫 3초만 표시 (이후 숨김 — best practice: progressive disclosure)
   const actionPrompt = document.createElement('div');
   actionPrompt.className = 'action-prompt';
@@ -1162,7 +1592,7 @@ function renderGame(): void {
   wrap.appendChild(settingsBtn);
 
   // 뒤로가기 버튼 (우상단) — 숨김 (일시정지 메뉴가 생겼으므로)
-  const back = button('← 로비', () => setScreen('lobby'), 'ghost game-back');
+  const back = button('← 로비', () => leaveToLobby(), 'ghost game-back');
   back.style.display = 'none';
   wrap.appendChild(back);
 
@@ -1204,6 +1634,29 @@ function renderGame(): void {
   const mapDef: MapDef = MAPS[profile.mapId];
   const mapObstacles = OBSTACLES_BY_MAP[profile.mapId];
   const ctx = createScene(canvasHost, mapDef);
+  let lastViewportW = 0;
+  let lastViewportH = 0;
+  const syncVisualViewport = (): void => {
+    const vv = window.visualViewport;
+    if (vv) {
+      if (Math.abs(vv.width - lastViewportW) < 2 && Math.abs(vv.height - lastViewportH) < 2) {
+        return;
+      }
+      lastViewportW = vv.width;
+      lastViewportH = vv.height;
+      wrap.style.top = `${vv.offsetTop}px`;
+      wrap.style.left = `${vv.offsetLeft}px`;
+      wrap.style.width = `${vv.width}px`;
+      wrap.style.height = `${vv.height}px`;
+    }
+    ctx.onResize();
+  };
+  addTrackedListener(window, 'resize', syncVisualViewport);
+  if (window.visualViewport) {
+    addTrackedListener(window.visualViewport, 'resize', syncVisualViewport);
+    addTrackedListener(window.visualViewport, 'scroll', syncVisualViewport);
+  }
+  syncVisualViewport();
   const mapRefs = buildMap(ctx.scene, mapDef);
   const exitDisc = buildExitPoint(ctx.scene);
   game.mapRefs = mapRefs;
@@ -1222,6 +1675,19 @@ function renderGame(): void {
   wrap.appendChild(minimapCanvas);
   const minimapCtx = minimapCanvas.getContext('2d')!;
   const minimapScale = (minimapCanvas.width - 16) / MAP.width;
+  type BotAgent = {
+    id: string;
+    role: AssignedRole;
+    mesh: THREE.Mesh;
+    material: THREE.MeshStandardMaterial;
+    taggerAI: TaggerAI | null;
+    runnerAI: RunnerAIStub | null;
+    out: boolean;
+    absorbHold: number;
+    kind: 'ai' | 'remote';
+  };
+  const bots: BotAgent[] = [];
+
   function drawMinimap(): void {
     const w = minimapCanvas.width;
     const h = minimapCanvas.height;
@@ -1250,11 +1716,13 @@ function renderGame(): void {
     minimapCtx.beginPath();
     minimapCtx.arc(wx2mx(exitPos.x), wz2my(exitPos.z), 4, 0, Math.PI * 2);
     minimapCtx.fill();
-    // AI (작은 점, 색은 자기/상대 역할에 따라)
-    minimapCtx.fillStyle = isTagger ? '#00e5ff' : '#ff3a5c';
-    minimapCtx.beginPath();
-    minimapCtx.arc(wx2mx(aiMesh.position.x), wz2my(aiMesh.position.z), 3.5, 0, Math.PI * 2);
-    minimapCtx.fill();
+    for (const bot of bots) {
+      if (bot.out) continue;
+      minimapCtx.fillStyle = bot.role === 'tagger' ? '#ff3a5c' : '#00e5ff';
+      minimapCtx.beginPath();
+      minimapCtx.arc(wx2mx(bot.mesh.position.x), wz2my(bot.mesh.position.z), 3.5, 0, Math.PI * 2);
+      minimapCtx.fill();
+    }
     // 자기 (큰 점 + 외곽선, 색은 자기/상대 역할에 따라)
     const selfColor = isTagger ? '#ff3a5c' : '#00e5ff';
     minimapCtx.fillStyle = selfColor;
@@ -1272,8 +1740,33 @@ function renderGame(): void {
   type RoundState = 'countdown' | 'playing' | 'ended';
   let roundState: RoundState = 'countdown';
   let roundTime: number = GAME.roundSeconds; // 남은 시간 (초)
-  let escapeHoldTime = 0; // 출구 위 유지 시간
   const roundStats = { absorbed: 0, outCount: 0, iceUsed: 0, boostUsed: 0, startedAt: 0 };
+  const paintTrailScore = (): void => {
+    if (roundScoreEl) roundScoreEl.textContent = `${roundStats.absorbed} / ${GAME.trailGoal}`;
+    if (game.statusTimer) game.statusTimer.textContent = String(roundStats.absorbed);
+  };
+  const checkTrailWin = (): boolean => {
+    if (roundState === 'ended') return true;
+    const judged = judgeTrailRound({
+      trailScore: roundStats.absorbed,
+      trailGoal: GAME.trailGoal,
+      timeLeft: roundTime,
+      playerCaught: false,
+      allRunnersOut: false,
+    });
+    if (!judged) return false;
+    showResult(judged.winner, judged.reason);
+    return true;
+  };
+  const addTrailScore = (n = 1): void => {
+    if (matchEntry === 'room' && net?.connected) {
+      net.sendScore();
+      return;
+    }
+    roundStats.absorbed += n;
+    paintTrailScore();
+    checkTrailWin();
+  };
 
   // 카운트다운 오버레이 (3, 2, 1, 시작!)
   const countdownEl = document.createElement('div');
@@ -1316,95 +1809,74 @@ function renderGame(): void {
   const resultRetryBtn = resultOverlay.querySelector<HTMLButtonElement>('#result-retry');
   const resultLobbyBtn = resultOverlay.querySelector<HTMLButtonElement>('#result-lobby');
   if (resultRetryBtn) {
-    resultRetryBtn.addEventListener('click', () => setScreen('room'));
+    resultRetryBtn.addEventListener('click', () => restartMatch());
+    resultRetryBtn.textContent = matchEntry === 'room' ? '🔄 대기실로' : '🔄 한 판 더!';
   }
   if (resultLobbyBtn) {
-    resultLobbyBtn.addEventListener('click', () => setScreen('lobby'));
+    resultLobbyBtn.addEventListener('click', () => leaveToLobby());
   }
 
-  // 2026-08-15: 인트로 시네마틱 — 카메라 고공 → 추적 위치 (카운트다운 동안)
-  const gameStartedAt = performance.now();
-  const introDuration = 4.0; // 카운트다운 시퀀스 + 약간 (초)
+  // 인트로/카운트다운 시계는 씬 로딩이 끝난 뒤 첫 프레임에서 무장.
+  // 로딩 중에 now()를 찍으면 '3'이 통째로 스킵된다.
+  let gameStartedAt = 0;
+  const introDuration = 4.0;
   const introStartPos = new THREE.Vector3(0, 28, 22);
   const introStartLook = new THREE.Vector3(0, 0, 0);
-  // 초기 카메라 위치를 인트로 시작 위치로 강제
   ctx.camera.position.copy(introStartPos);
   ctx.camera.lookAt(introStartLook);
 
-  // 카운트다운 시퀀스 (3, 2, 1, 시작)
-  const countdownSequence = ['3', '2', '1', '시작!'];
   let countdownIdx = 0;
-  // 2026-08-15: 라운드 시작 후 2초 그레이스 (술래 동결) — 도망자 즉시 OUT 방지
-  const ROUND_START_GRACE_SEC = 2.0;
+  const ROUND_START_GRACE_SEC = GAME.taggerStartGraceSeconds;
   let graceTimeLeft = 0;
-  // 2026-08-16: 카운트다운 안전망 — performance.now() 기반 폴링 (Pass 8.2)
-  // - 증상: 어떤 환경(특히 데스크탑 특정 role)에서 setTimeout/setInterval 모두
-  //   fire 안 해서 '3'에서 영구 멈춤. Pass 8/8.1 (setTimeout 폴백, setInterval 추가)도 안 통함.
-  // - 픽스: setTimeout 의존도 완전 제거. 매 프레임 update()에서 performance.now()로
-  //   직접 텍스트 결정 + 직접 playing 전환. 가장 robust한 fix.
-  // - 한 번의 첫 tickCountdown은 첫 '3' 표시 + 비프음만 담당 (setTimeout 안 씀)
-  const countdownStartedAt = performance.now();
-  const COUNTDOWN_STEP_MS = 800; // 각 카운트다운 표시 시간
-  const COUNTDOWN_GAP_MS = 250; // 카운트다운 사이 갭
-  const COUNTDOWN_STEP_TOTAL = COUNTDOWN_STEP_MS + COUNTDOWN_GAP_MS; // 1050ms per step
-  // 2026-08-16: 매 프레임 카운트다운 진행 (setTimeout 없음)
-  // - idx 0 (3): 0 ~ 800ms
-  // - idx 1 (2): 1050 ~ 1850ms
-  // - idx 2 (1): 2100 ~ 2900ms
-  // - idx 3 (시작!): 3150 ~ 3950ms
-  // - playing 전환: >= 4200ms
-  let countdownFirstSfxPlayed = false;
-  function tickCountdown(): void {
-    // 2026-08-16: 첫 호출은 첫 '3' 표시 + 비프음만. setTimeout 안 씀.
-    if (countdownText) countdownText.textContent = countdownSequence[0];
-    countdownEl.classList.add('show');
-    if (sound && !countdownFirstSfxPlayed) {
-      try {
-        sound.playFootstep(0.6);
-        countdownFirstSfxPlayed = true;
-      } catch (err) {
-        console.warn('[countdown] playFootstep 실패 (계속 진행)', err);
-      }
-    }
-  }
-  tickCountdown();
-  // 2026-08-16: 매 프레임 update()에서 호출. setTimeout/setInterval 없음.
-  // 어떤 환경에서든 requestAnimationFrame이 한 번이라도 fire하면 진행됨.
-  function updateCountdownFromTime(): void {
-    if (roundState !== 'countdown') return;
-    const elapsed = performance.now() - countdownStartedAt;
-    // 4.2초 후: playing으로 전환
-    if (elapsed >= COUNTDOWN_STEP_TOTAL * countdownSequence.length) {
+  let countdownStartedAt = 0;
+  let countdownPausedAt: number | null = null;
+  let countdownPausedAccumMs = 0;
+  const firstSnap = firstCountdownPaint();
+  if (countdownText) countdownText.textContent = firstSnap.label;
+  countdownEl.classList.add('show');
+
+  function applyCountdownFromClock(now: number): ReturnType<typeof countdownFromElapsed> {
+    if (countdownStartedAt === 0) countdownStartedAt = now;
+    const elapsed = effectiveElapsedMs(
+      now,
+      countdownStartedAt,
+      countdownPausedAt,
+      countdownPausedAccumMs,
+    );
+    const snap = countdownFromElapsed(elapsed);
+    if (roundState !== 'countdown') return snap;
+    if (snap.state === 'playing') {
       countdownEl.classList.remove('show');
       roundState = 'playing';
       roundTime = GAME.roundSeconds;
-      roundStats.startedAt = performance.now();
-      if (taggerAI) taggerAI.setFrozen(true);
+      roundStats.startedAt = now;
+      if (game.tagger) game.tagger.setFrozen(true);
       graceTimeLeft = ROUND_START_GRACE_SEC;
       try {
-        if (sound) sound.playAbsorbStart();
+        game.sound?.playAbsorbStart();
       } catch (err) {
         console.warn('[countdown] playAbsorbStart 실패', err);
       }
-      triggerShake(0.3);
-      return;
+      return snap;
     }
-    // 현재 시간에 해당하는 카운트다운 idx 계산
-    const newIdx = Math.min(
-      countdownSequence.length - 1,
-      Math.floor(elapsed / COUNTDOWN_STEP_TOTAL),
-    );
-    if (newIdx === countdownIdx) return;
-    countdownIdx = newIdx;
-    if (countdownText) countdownText.textContent = countdownSequence[countdownIdx];
-    countdownEl.classList.add('show');
-    if (sound && countdownIdx < 3) {
-      try {
-        sound.playFootstep(0.6);
-      } catch (err) {
-        console.warn('[countdown] playFootstep 실패', err);
+    if (snap.index !== countdownIdx) {
+      countdownIdx = snap.index;
+      if (countdownText) {
+        countdownText.textContent = snap.label;
+        countdownText.style.animation = 'none';
+        void countdownText.offsetWidth;
+        countdownText.style.animation = '';
+      }
+      if (snap.overlayVisible) countdownEl.classList.add('show');
+      if (game.sound && countdownIdx < 3) {
+        try {
+          game.sound.playFootstep(0.6);
+        } catch (err) {
+          console.warn('[countdown] playFootstep 실패', err);
+        }
       }
     }
+    return snap;
   }
 
   // 결과 표시 (Fall Guys WIN! / ELIMINATED! 카툰 스타일)
@@ -1448,6 +1920,7 @@ function renderGame(): void {
     } else {
       triggerShake(0.6);
     }
+    game.out = true;
     resultOverlay.classList.add('show');
   }
   const mapHalfD = MAP.depth / 2 - MAP.wallThickness;
@@ -1484,8 +1957,7 @@ function renderGame(): void {
       ),
       selfMaterial,
     );
-    // v5: 장애물 (-4,6) 바깥으로 시작 (이전 (-5,5)는 장애물 안에 갇혀 못 나옴)
-    selfMesh.position.set(-11, PLAYER.height / 2, 9);
+    selfMesh.position.set(0, PLAYER.height / 2, 0);
     selfMesh.castShadow = true;
     selfHoodLight = new THREE.PointLight(
       PLAYER.taggerAccent,
@@ -1509,7 +1981,7 @@ function renderGame(): void {
       new THREE.CapsuleGeometry(PLAYER.radius, PLAYER.height - PLAYER.radius * 2, 4, 8),
       selfMaterial,
     );
-    selfMesh.position.set(0, PLAYER.height / 2, -8);
+    selfMesh.position.set(0, PLAYER.height / 2, 0);
     selfMesh.castShadow = true;
   }
   ctx.scene.add(selfMesh);
@@ -1519,67 +1991,92 @@ function renderGame(): void {
     bodyColor: selfColor,
   });
 
-  // AI 캐릭터 (반대 역할) — 술래는 검은 후드 + 라이트, 도망자는 캡슐
-  let aiMaterial: THREE.MeshStandardMaterial;
-  let aiColor: number;
-  let aiLabel: string;
-  let aiHoodLight: THREE.PointLight | null = null;
-  if (isTagger) {
-    // AI = 도망자 (캡슐)
-    aiColor = 0xffffff;
-    // v34: AI 라벨에 "AI" 접두사 — 사용자가 자기 닉네임과 구분되게
-    aiLabel = 'AI 도망자';
-    aiMaterial = new THREE.MeshStandardMaterial({
-      color: aiColor,
-      emissive: aiColor,
-      emissiveIntensity: 0.3,
-      roughness: 0.4,
-      metalness: 0.2,
-    });
-  } else {
-    // AI = 술래 (검은 후드 + 라이트)
-    aiColor = PLAYER.taggerAccent;
-    // v34: AI 라벨에 "AI" 접두사
-    aiLabel = 'AI 술래';
-    aiMaterial = new THREE.MeshStandardMaterial({
-      color: PLAYER.taggerColor,
-      emissive: PLAYER.taggerEmissiveColor,
-      emissiveIntensity: PLAYER.taggerEmissiveIntensity,
-      roughness: 0.6,
-      metalness: 0.3,
-    });
-  }
-  const aiMesh = new THREE.Mesh(
-    new THREE.CapsuleGeometry(
-      isTagger ? PLAYER.radius : PLAYER.radius * GAME.taggerScale,
-      (PLAYER.height - PLAYER.radius * 2) * (isTagger ? 1 : GAME.taggerScale),
-      4,
-      8,
-    ),
-    aiMaterial,
+  const runnerColorList = Object.values(PLAYER.runnerColors);
+  const liveIds = new Set(
+    (net?.players ?? []).map((p) => p.id).filter((id) => id && id !== net?.id),
   );
-  // 2026-08-15 v9: AI 도망자 시작 위치 갇힘 버그 수정
-  // - 기존 (10, -10): 장애물 (9.1, -10.4)에 4방향 모두 막혀서 갇힘
-  // - 새 위치 (12, -12): SE 코너, 모든 장애물에서 멀리, 플레이어 (-11, 9)와 ~28m
-  // - AI 술래 (12, 14): NE 코너, 이미 clear
-  aiMesh.position.set(isTagger ? 12 : 12, PLAYER.height / 2, isTagger ? -12 : 14);
-  aiMesh.castShadow = true;
-  ctx.scene.add(aiMesh);
-  // 2026-08-15: AI 머리/후드/눈 추가
-  addCharacterFeatures(aiMesh, {
-    isTagger: !isTagger, // AI는 반대 역할
-    bodyColor: aiColor,
-  });
-  if (!isTagger) {
-    aiHoodLight = new THREE.PointLight(
-      PLAYER.taggerAccent,
-      PLAYER.taggerHoodLightIntensity,
-      PLAYER.taggerHoodLightDistance,
-    );
-    aiHoodLight.position.copy(aiMesh.position);
-    aiHoodLight.position.y += PLAYER.height * 0.5;
-    ctx.scene.add(aiHoodLight);
+  const aiSeats = matchRoster.filter((s) => s.id !== 'self');
+  const rosterAis =
+    aiSeats.length > 0
+      ? aiSeats
+      : [{ id: 'ai-0', role: (isTagger ? 'runner' : 'tagger') as AssignedRole }];
+  const spawnLayout = matchSpawns(
+    isTagger,
+    rosterAis.map((s) => s.role),
+  );
+  const selfSpawn = net?.spawns[net.id];
+  selfMesh.position.set(
+    selfSpawn?.x ?? spawnLayout.player.x,
+    PLAYER.height / 2,
+    selfSpawn?.z ?? spawnLayout.player.z,
+  );
+  if (selfHoodLight) {
+    selfHoodLight.position.copy(selfMesh.position);
+    selfHoodLight.position.y += PLAYER.height * 0.5;
   }
+  rosterAis.forEach((seat, i) => {
+    const botIsTagger = seat.role === 'tagger';
+    const netSpawn = net?.spawns[seat.id];
+    const spawn = netSpawn ?? spawnLayout.bots[i] ?? spawnLayout.player;
+    const botColor = botIsTagger
+      ? PLAYER.taggerColor
+      : (runnerColorList[i % runnerColorList.length] ?? 0xffffff);
+    const material = botIsTagger
+      ? new THREE.MeshStandardMaterial({
+          color: PLAYER.taggerColor,
+          emissive: PLAYER.taggerEmissiveColor,
+          emissiveIntensity: PLAYER.taggerEmissiveIntensity,
+          roughness: 0.6,
+          metalness: 0.3,
+        })
+      : new THREE.MeshStandardMaterial({
+          color: botColor,
+          emissive: botColor,
+          emissiveIntensity: 0.3,
+          roughness: 0.4,
+          metalness: 0.2,
+        });
+    const scale = botIsTagger ? GAME.taggerScale : 1;
+    const mesh = new THREE.Mesh(
+      new THREE.CapsuleGeometry(
+        PLAYER.radius * scale,
+        (PLAYER.height - PLAYER.radius * 2) * scale,
+        4,
+        8,
+      ),
+      material,
+    );
+    mesh.position.set(spawn.x, PLAYER.height / 2, spawn.z);
+    mesh.castShadow = true;
+    ctx.scene.add(mesh);
+    addCharacterFeatures(mesh, { isTagger: botIsTagger, bodyColor: botColor });
+    const remote = net?.players.find((p) => p.id === seat.id);
+    const isRemote = Boolean(remote) || liveIds.has(seat.id);
+    if (PLAYER.showPlayerLabels) {
+      addPlayerLabel(
+        mesh,
+        remote?.name ?? (botIsTagger ? 'AI 술래' : `AI ${i + 1}`),
+        botIsTagger ? PLAYER.taggerAccent : botColor,
+        PLAYER.labelOffsetY,
+        false,
+      );
+    }
+    bots.push({
+      id: seat.id,
+      role: seat.role,
+      mesh,
+      material,
+      taggerAI: null,
+      runnerAI: null,
+      out: false,
+      absorbHold: 0,
+      kind: isRemote ? 'remote' : 'ai',
+    });
+  });
+  const taggerMesh = isTagger
+    ? selfMesh
+    : (bots.find((b) => b.role === 'tagger')?.mesh ?? bots[0].mesh);
+  const aiMesh = taggerMesh === selfMesh ? (bots[0]?.mesh ?? selfMesh) : taggerMesh;
 
   // 2026-08-15 v3: 컨트롤 개선 — 3D 방향 인디케이터
   // - 출구: 항상 보이는 빛 기둥 (도망자용)
@@ -1637,10 +2134,10 @@ function renderGame(): void {
   let isAiming = false;
   if (isTagger) {
     // 길이 1m 박스 (실제 update에서 scale로 늘림)
-    const laserGeom = new THREE.CylinderGeometry(0.05, 0.05, 1, 6);
+    const laserGeom = new THREE.CylinderGeometry(0.12, 0.04, 1, 8);
     laserGeom.translate(0, 0.5, 0); // 한쪽 끝이 원점
     aimLaserMat = new THREE.MeshBasicMaterial({
-      color: 0xff3a3a,
+      color: GAME.shotColor,
       transparent: true,
       opacity: 0.55,
     });
@@ -1670,6 +2167,7 @@ function renderGame(): void {
     collisionMargin: !isTagger ? 0.4 : 0.6, // v5: 도망자만 좁은 틈 통과 가능 (반경 0.85)
     speedMultiplier: isTagger ? GAME.taggerPatrolSpeedMultiplier : 1.0, // v8: 술래 1.9배
   });
+  if (!isTagger) player.setSpeedTier('sprint');
   game.player = player;
   updateSpeedButtons('run');
 
@@ -1679,51 +2177,143 @@ function renderGame(): void {
   // role=tagger일 땐 자기가 술래이므로 AI는 정적 도망자로 두고, role=runner일 때만 술래 AI가 움직임.
   // (단일 플레이어 데모이므로 게임성 단순화)
   let taggerAI: TaggerAI | null = null;
-  // v5: 술래 메쉬 참조 — 부스터 시스템이 scale 갱신할 대상
-  // 자기가 도망자면 술래 = aiMesh, 자기가 술래면 술래 = selfMesh
-  const taggerMeshForBoost = !isTagger ? aiMesh : selfMesh;
-
-  // v5: 부스터 시스템 — 술래만 적용
+  let chasePrey: { x: number; z: number; mesh: THREE.Object3D; isPlayer: boolean } | undefined;
+  let taggerStunLeft = 0;
+  const taggerMeshForBoost = taggerMesh;
   const boost = isTagger
     ? new BoostSystem({
         onVisualChange: (params) => {
-          // scale 갱신 (정지 중 더 작게, 피로도 비례 shrink)
           taggerMeshForBoost.scale.setScalar(params.scale);
         },
       })
     : null;
 
-  let runnerAI: RunnerAIStub | null = null;
-  if (!isTagger) {
-    // 자기가 도망자: AI 술래가 추격
-    taggerAI = new TaggerAI({
-      mesh: aiMesh,
-      obstacles: mapObstacles, // 2026-08-15: 맵별 장애물
-      mapHalfWidth: mapHalfW,
-      mapHalfDepth: mapHalfD,
-      target: selfMesh, // 자기를 추적
-      boostSystem: boost ?? undefined,
-    });
-    game.tagger = taggerAI;
-  } else {
-    // 자기가 술래: AI 도망자는 단순 도주 (랜덤 + 자기와 거리 유지)
-    runnerAI = new RunnerAIStub({
-      mesh: aiMesh,
-      obstacles: mapObstacles, // 2026-08-15: 맵별 장애물
-      mapHalfWidth: mapHalfW,
-      mapHalfDepth: mapHalfD,
-      threat: selfMesh,
-    });
-    game.tagger = null;
+  for (const bot of bots) {
+    if (bot.kind === 'remote') continue;
+    if (bot.role === 'tagger') {
+      bot.taggerAI = new TaggerAI({
+        mesh: bot.mesh,
+        obstacles: mapObstacles,
+        mapHalfWidth: mapHalfW,
+        mapHalfDepth: mapHalfD,
+        target: selfMesh,
+        boostSystem: boost ?? undefined,
+      });
+      taggerAI = bot.taggerAI;
+      taggerAI.setFrozen(true);
+    } else {
+      bot.runnerAI = new RunnerAIStub({
+        mesh: bot.mesh,
+        obstacles: mapObstacles,
+        mapHalfWidth: mapHalfW,
+        mapHalfDepth: mapHalfD,
+        threat: taggerMesh,
+      });
+    }
   }
+  game.tagger = taggerAI;
 
-  // 자국 emitter: 술래 = 추적자, 도망자 = 술래 AI
   const trails = new TrailEmitter({
     scene: ctx.scene,
-    tagger: !isTagger ? aiMesh : selfMesh,
+    tagger: taggerMesh,
     taggerSpeedTierRef: { current: 'run' },
   });
   game.trails = trails;
+
+  const itemField = new ItemField({
+    scene: ctx.scene,
+    obstacles: mapObstacles,
+    halfWidth: mapHalfW,
+    halfDepth: mapHalfD,
+  });
+  game.disposers.push(() => itemField.dispose());
+  let jellyLeft = 0;
+  let smokeLeft = 0;
+  const smokeCloud = new THREE.Group();
+  smokeCloud.visible = false;
+  const smokePuffs: Array<{ mesh: THREE.Mesh; phase: number; orbit: number }> = [];
+  {
+    const puffGeom = new THREE.SphereGeometry(1, 10, 8);
+    for (let i = 0; i < 9; i++) {
+      const mesh = new THREE.Mesh(
+        puffGeom,
+        new THREE.MeshBasicMaterial({
+          color: i % 2 === 0 ? 0xc4b0d4 : 0xe8e0f0,
+          transparent: true,
+          opacity: 0.42,
+          depthWrite: false,
+        }),
+      );
+      smokeCloud.add(mesh);
+      smokePuffs.push({ mesh, phase: i * 0.73, orbit: 1.15 + (i % 3) * 0.4 });
+    }
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(3.1, 22),
+      new THREE.MeshBasicMaterial({
+        color: 0x9b59b6,
+        transparent: true,
+        opacity: 0.28,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = 0.05;
+    smokeCloud.add(disc);
+  }
+  ctx.scene.add(smokeCloud);
+  game.disposers.push(() => {
+    ctx.scene.remove(smokeCloud);
+    const seen = new Set<THREE.BufferGeometry>();
+    smokeCloud.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (!seen.has(child.geometry)) {
+        seen.add(child.geometry);
+        child.geometry.dispose();
+      }
+      (child.material as THREE.Material).dispose();
+    });
+  });
+  const setSelfHidden = (hidden: boolean): void => {
+    selfMesh.traverse((child) => {
+      if (child instanceof THREE.Sprite) {
+        child.visible = !hidden;
+        return;
+      }
+      if (!(child instanceof THREE.Mesh)) return;
+      const mat = child.material as THREE.MeshStandardMaterial;
+      if (!mat) return;
+      mat.transparent = hidden;
+      mat.opacity = hidden ? 0.16 : 1;
+      if (child === selfMesh && 'emissiveIntensity' in mat) {
+        mat.emissiveIntensity = hidden ? 0 : isTagger ? PLAYER.taggerEmissiveIntensity : 0.35;
+      }
+    });
+    if (!hidden) {
+      selfMaterial.transparent = false;
+      selfMaterial.opacity = 1;
+      selfMaterial.emissiveIntensity = isTagger ? PLAYER.taggerEmissiveIntensity : 0.35;
+    }
+  };
+  const applyItem = (kind: ItemKind): void => {
+    if (kind === 'jelly') jellyLeft = GAME.itemJellyDuration;
+    else if (kind === 'smoke') {
+      smokeLeft = GAME.itemSmokeDuration;
+      smokeCloud.visible = true;
+      setSelfHidden(true);
+      chasePrey = undefined;
+      for (const bot of bots) bot.taggerAI?.breakChase(selfMesh.position);
+    } else if (kind === 'sticky') {
+      itemField.dropSticky(selfMesh.position.x, selfMesh.position.z);
+    }
+    if (sound) sound.playBoost();
+    paintItemSlot();
+  };
+  const tryUseItem = (): void => {
+    if (roundState !== 'playing' || game.out) return;
+    const kind = itemField.useHeld();
+    if (kind) applyItem(kind);
+  };
 
   // 2026-08-15: 먼지 파티클 (자기 발밑) — 이동 / 부스터 시 자동 생성
   const dust = new DustSystem({
@@ -1767,7 +2357,7 @@ function renderGame(): void {
       // 카메라 셰이크 (작은 임팩트)
       triggerShake(0.15);
       // 통계
-      roundStats.absorbed += 1;
+      addTrailScore(1);
     },
     onCancel: () => {
       sound.playAbsorbCancel();
@@ -1777,33 +2367,18 @@ function renderGame(): void {
 
   // 2026-08-09 v2: 머리 위에 캔버스 라벨 스프라이트
   if (PLAYER.showPlayerLabels) {
-    if (isTagger) {
-      addPlayerLabel(
-        ctx.scene,
-        selfMesh.position,
-        selfLabel,
-        PLAYER.taggerAccent,
-        PLAYER.labelOffsetY,
-        true,
-      );
-      addPlayerLabel(ctx.scene, aiMesh.position, aiLabel, aiColor, PLAYER.labelOffsetY, false);
-    } else {
-      addPlayerLabel(ctx.scene, selfMesh.position, selfLabel, selfColor, PLAYER.labelOffsetY, true);
-      addPlayerLabel(
-        ctx.scene,
-        aiMesh.position,
-        aiLabel,
-        PLAYER.taggerAccent,
-        PLAYER.labelOffsetY,
-        false,
-      );
-    }
+    addPlayerLabel(
+      selfMesh,
+      selfLabel,
+      isTagger ? PLAYER.taggerAccent : selfColor,
+      PLAYER.labelOffsetY,
+      true,
+    );
   }
 
-  // 2026-08-09 v4: 얼림 (Ice) 시스템 — 술래 메쉬의 색상 토글 (얼음 시안)
-  // 도망자 모드일 때만 술래(aiMesh)가 있으므로 그때만 활성.
-  const taggerMeshRef = !isTagger ? aiMesh : null;
-  const taggerMaterialRef = !isTagger ? aiMaterial : null;
+  const taggerBot = bots.find((b) => b.role === 'tagger');
+  const taggerMeshRef = taggerBot?.mesh ?? null;
+  const taggerMaterialRef = taggerBot?.material ?? null;
   const originalTaggerEmissive = taggerMaterialRef ? taggerMaterialRef.emissive.getHex() : 0;
   const originalTaggerIntensity = taggerMaterialRef ? taggerMaterialRef.emissiveIntensity : 0;
 
@@ -1838,8 +2413,8 @@ function renderGame(): void {
     if (ice.triggerIfReady(dist)) {
       sound.playIce();
       // 2026-08-15: 술래 위치에 서리 버스트 (얼음 파티클)
-      if (dust) dust.burst(aiMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
-      roundStats.iceUsed += 1; // 2026-08-16: 결과 화면 통계
+      if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
+      roundStats.iceUsed += 1;
     }
   };
 
@@ -1872,9 +2447,9 @@ function renderGame(): void {
   addTrackedListener(canvasHost, 'keydown', absorbKeyHandler);
   addTrackedListener(canvasHost, 'keyup', absorbKeyHandler);
   function distVecToTagger(): number {
-    const dx = selfMesh.position.x - aiMesh.position.x;
-    const dz = selfMesh.position.z - aiMesh.position.z;
-    return Math.sqrt(dx * dx + dz * dz); // ES5 호환
+    const dx = selfMesh.position.x - taggerMesh.position.x;
+    const dz = selfMesh.position.z - taggerMesh.position.z;
+    return Math.hypot(dx, dz);
   }
   // F 키로 얼림 발동 (도망자만) — 2026-08-09 v5: 캔버스에 등록 (포커스 안정)
   // 2026-08-16: addTrackedListener 사용 — teardownGame에서 자동 해제
@@ -1898,9 +2473,7 @@ function renderGame(): void {
   };
   addTrackedListener(canvasHost, 'keydown', boostKeyHandler);
 
-  // 2026-08-15: 포박줄 발사 (술래만) — F 홀딩=조준, 떼면 발사
-  // v2: keydown = 조준 ON, keyup = 발사
-  // v8: shotKey F로 변경 (도망자 얼림과 충돌하지만 role별 분기)
+  // 그물망 투척 (술래만) — F 홀딩=조준, 떼면 발사
   addTrackedListener(canvasHost, 'keydown', (e: Event) => {
     const ke = e as KeyboardEvent;
     if (ke.code !== GAME.shotKey || !isTagger) return;
@@ -1919,7 +2492,7 @@ function renderGame(): void {
       }
     }
   });
-  // 2026-08-15: 마우스 왼쪽 클릭 = 즉시 사격 (조준 없이)
+  // 마우스 왼쪽 클릭 = 즉시 그물 (조준 없이)
   addTrackedListener(canvasHost, 'click', (e: Event) => {
     if (!isTagger) return;
     if (roundState !== 'playing' || game.out) return;
@@ -1938,7 +2511,6 @@ function renderGame(): void {
   let boostBar: HTMLElement | null = null;
   let boostFill: HTMLElement | null = null;
   let boostStatus: HTMLElement | null = null;
-  // 2026-08-15: 포박줄 쿨다운 HUD (술래만)
   let shotBar: HTMLElement | null = null;
   let shotFill: HTMLElement | null = null;
   let shotStatus: HTMLElement | null = null;
@@ -1956,12 +2528,11 @@ function renderGame(): void {
     boostStatus = boostWrap.querySelector<HTMLElement>('#boost-status');
   }
 
-  // 2026-08-15: 포박줄 쿨다운 HUD (술래만, 부스터 아래)
   if (isTagger) {
     const shotWrap = document.createElement('div');
     shotWrap.className = 'shot-wrap';
     shotWrap.innerHTML = `
-      <div class="boost-label">SHOT <span class="boost-hint">F (홀딩) · 클릭</span></div>
+      <div class="boost-label">그물 <span class="boost-hint">F (홀딩) · 클릭</span></div>
       <div class="boost-bar"><div class="boost-fill shot-fill" id="shot-fill"></div></div>
       <div class="boost-status" id="shot-status">준비</div>
     `;
@@ -1985,13 +2556,13 @@ function renderGame(): void {
   const dashFill = dashWrap.querySelector<HTMLElement>('#dash-fill');
   const dashStatus = dashWrap.querySelector<HTMLElement>('#dash-status');
 
-  // 2026-08-15 v3: 모바일 탭-사격 버튼 (술래, 우상단) — 화면 탭으로 즉시 사격
+  // 모바일 그물 버튼 (술래)
   let shotFireBtn: HTMLButtonElement | null = null;
   if (isTagger && mobileMode) {
     shotFireBtn = document.createElement('button');
     shotFireBtn.type = 'button';
     shotFireBtn.className = 'shot-fire-btn';
-    shotFireBtn.innerHTML = '🔥<br><span class="shot-fire-hint">사격</span>';
+    shotFireBtn.innerHTML = '🕸️<br><span class="shot-fire-hint">그물</span>';
     shotFireBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -2016,7 +2587,7 @@ function renderGame(): void {
       const dist = distVecToTagger();
       if (ice.triggerIfReady(dist)) {
         sound.playIce();
-        if (dust) dust.burst(aiMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
+        if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
         roundStats.iceUsed += 1; // 2026-08-16: 결과 화면 통계
       }
     });
@@ -2028,6 +2599,34 @@ function renderGame(): void {
     wrap.appendChild(iceWrap);
   }
 
+  const itemSlot = document.createElement('button');
+  itemSlot.type = 'button';
+  itemSlot.className = 'item-slot';
+  itemSlot.setAttribute('aria-label', '아이템 사용');
+  wrap.appendChild(itemSlot);
+  function paintItemSlot(): void {
+    const held = itemField.bag.held;
+    if (!held) {
+      itemSlot.classList.remove('has-item');
+      itemSlot.innerHTML = `<span class="item-slot-empty">아이템</span><span class="item-slot-hint">Q</span>`;
+      return;
+    }
+    const meta = ITEM_META[held];
+    itemSlot.classList.add('has-item');
+    itemSlot.innerHTML = `<span class="item-slot-emoji">${meta.emoji}</span><span class="item-slot-name">${meta.label}</span><span class="item-slot-hint">Q</span>`;
+  }
+  paintItemSlot();
+  itemSlot.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tryUseItem();
+  });
+  addTrackedListener(canvasHost, 'keydown', (e: Event) => {
+    const ke = e as KeyboardEvent;
+    if (ke.repeat || ke.code !== 'KeyQ') return;
+    tryUseItem();
+  });
+
   // 2026-08-15: 흡수 HUD (화면 하단 중앙) — 도망자만
   let absorbHud: HTMLElement | null = null;
   let absorbProgress: HTMLElement | null = null;
@@ -2037,25 +2636,110 @@ function renderGame(): void {
     absorbWrap.className = 'absorb-hud';
     absorbWrap.innerHTML = `
       <div class="absorb-bar"><div class="absorb-bar-fill" id="absorb-bar-fill"></div></div>
-      <div class="absorb-label" id="absorb-label">자국 흡수 (E)</div>
+      <div class="absorb-label" id="absorb-label">${mobileMode ? '흡수' : '자국 흡수 (E)'}</div>
     `;
     wrap.appendChild(absorbWrap);
     absorbHud = absorbWrap;
     absorbProgress = absorbWrap.querySelector<HTMLElement>('#absorb-bar-fill');
     absorbLabel = absorbWrap.querySelector<HTMLElement>('#absorb-label');
+    if (mobileMode) {
+      absorbWrap.style.pointerEvents = 'auto';
+      const startAbsorbTouch = (e: Event): void => {
+        e.preventDefault();
+        e.stopPropagation();
+        const query = trails.queryNearest(selfMesh.position, 1.5);
+        if (!query.hit) return;
+        absorb.setLastTrailPosition(query.position!.x, query.position!.z);
+        absorb.setStrengthConsumed(query.strength);
+        if (absorb.tryStart()) {
+          player.setAbsorbing(true);
+          sound.playAbsorbStart();
+        }
+      };
+      const stopAbsorbTouch = (): void => {
+        if (absorb.isAbsorbing()) {
+          absorb.reset();
+          player.setAbsorbing(false);
+          sound.playAbsorbCancel();
+        }
+      };
+      addTrackedListener(absorbWrap, 'pointerdown', startAbsorbTouch);
+      addTrackedListener(absorbWrap, 'pointerup', stopAbsorbTouch);
+      addTrackedListener(absorbWrap, 'pointercancel', stopAbsorbTouch);
+    }
   }
   // v6: 모바일 가상 조이스틱 (터치 환경 / 좁은 너비에서 자동 표시)
   let joystick: Joystick | null = null;
+  let lookStick: LookStick | null = null;
   if (mobileMode) {
     joystick = new Joystick({
       host: wrap,
+      baseRadius: 64,
+      knobRadius: 30,
       onChange: (f, r) => {
-        // 키보드 input은 그대로 두고, 조이스틱이 setInput으로 직접 주입
-        // (키보드/터치 동시 사용 가능, 조이스틱 떼면 tick에서 자동 0)
         player.setInput(f, r);
+        const mag = Math.hypot(f, r);
+        if (mag > 0.85) player.setSpeedTier('sprint');
+        else if (mag > 0.35) player.setSpeedTier('run');
+        else if (mag > 0.01) player.setSpeedTier('walk');
       },
     });
     joystick.mount();
+    lookStick = new LookStick({ host: wrap });
+    lookStick.mount();
+  }
+
+  const netEuler = new THREE.Euler();
+  function syncNetwork(): void {
+    if (matchEntry !== 'room' || !net?.connected) return;
+    netEuler.setFromQuaternion(selfMesh.quaternion, 'YXZ');
+    net.sendPos(selfMesh.position.x, selfMesh.position.z, netEuler.y);
+    for (const bot of bots) {
+      if (bot.kind !== 'remote') continue;
+      const peer = net.peers.get(bot.id);
+      if (!peer) continue;
+      const dx = peer.x - bot.mesh.position.x;
+      const dz = peer.z - bot.mesh.position.z;
+      if (dx * dx + dz * dz > 36) {
+        bot.mesh.position.x = peer.x;
+        bot.mesh.position.z = peer.z;
+      } else {
+        bot.mesh.position.x += dx * 0.5;
+        bot.mesh.position.z += dz * 0.5;
+      }
+      if (Number.isFinite(peer.yaw)) bot.mesh.rotation.y = peer.yaw;
+      if (peer.out && !bot.out) {
+        bot.out = true;
+        bot.material.transparent = true;
+        bot.material.opacity = 0.3;
+        bot.mesh.scale.set(0.6, 0.4, 0.6);
+      }
+    }
+    if (net.score !== roundStats.absorbed) {
+      roundStats.absorbed = net.score;
+      paintTrailScore();
+    }
+  }
+  const netSyncTimer = window.setInterval(syncNetwork, 50);
+  game.disposers.push(() => window.clearInterval(netSyncTimer));
+
+  if (matchEntry === 'room' && net) {
+    net.onCaught = (id) => {
+      if (id === net?.id) {
+        showResult('tagger', '술래에게 잡혔습니다');
+        return;
+      }
+      const bot = bots.find((b) => b.id === id);
+      if (bot && !bot.out) {
+        bot.out = true;
+        bot.material.transparent = true;
+        bot.material.opacity = 0.3;
+        bot.mesh.scale.set(0.6, 0.4, 0.6);
+      }
+    };
+    net.onEnd = (winner, reason) => {
+      showResult(winner, reason);
+    };
   }
 
   // === 카메라 팔로우 (2026-08-15: 오비팅 → 플레이어 뒤로) ===
@@ -2086,10 +2770,8 @@ function renderGame(): void {
   };
 
   // 2026-08-15: OUT 슬로모 + 흑백 (드라마틱 연출)
-  let slowmoTime = 0; // 남은 슬로모 시간 (초)
-  let slowmoActive = false;
+  const slowmoActive = false;
   const SLOWMO_FACTOR = 0.25; // 0.25x 속도
-  const SLOWMO_FALLBACK_TIME = 0.7;
 
   // === OUT 오버레이 (Fall Guys 카툰) ===
   const outOverlay = document.createElement('div');
@@ -2156,12 +2838,10 @@ function renderGame(): void {
   }
 
   if (outRetryBtn) {
-    outRetryBtn.addEventListener('click', () => {
-      setScreen('room'); // 재시작은 room → 3D 데모 시작 (Phase B 한계)
-    });
+    outRetryBtn.addEventListener('click', () => restartMatch());
   }
   if (outLobbyBtn) {
-    outLobbyBtn.addEventListener('click', () => setScreen('lobby'));
+    outLobbyBtn.addEventListener('click', () => leaveToLobby());
   }
 
   // === 거리 비교 헬퍼 ===
@@ -2179,17 +2859,35 @@ function renderGame(): void {
     const moved = Math.sqrt(moveDx * moveDx + moveDz * moveDz);
     prevPos.copy(selfMesh.position);
 
-    // 2026-08-15 v4: 일시정지 중 — 게임 시간 정지, 비네트만
-    if (pauseOverlay.classList.contains('show')) {
-      return;
+    const now = performance.now();
+    if (gameStartedAt === 0) gameStartedAt = now;
+    const paused = pauseOverlay.classList.contains('show');
+    if (paused) {
+      if (countdownPausedAt === null) countdownPausedAt = now;
+    } else if (countdownPausedAt !== null) {
+      countdownPausedAccumMs += now - countdownPausedAt;
+      countdownPausedAt = null;
     }
 
-    // 2026-08-15: 카운트다운 중에는 입력 차단 (시각만 진행)
     if (roundState === 'countdown') {
-      // 2026-08-16: 카운트다운 매 프레임 폴링 (Pass 8.2 — setTimeout 의존도 완전 제거)
-      updateCountdownFromTime();
-      // 2026-08-15: 인트로 시네마틱 카메라 (고공 → 추적 위치)
-      const introT = Math.min(1, (performance.now() - gameStartedAt) / (introDuration * 1000));
+      const snap = applyCountdownFromClock(now);
+      if (snap.state === 'playing') {
+        cameraFacing.set(0, 0, -1);
+        cameraDesired.copy(selfMesh.position);
+        cameraDesired.addScaledVector(cameraFacing, -camState.distance);
+        cameraDesired.y = Math.max(SCENE.cameraFollowHeight, 7);
+        ctx.camera.position.copy(cameraDesired);
+        ctx.camera.lookAt(selfMesh.position.x, selfMesh.position.y + 1.5, selfMesh.position.z);
+        camState.yaw = 0;
+        camState.yawTarget = 0;
+      }
+      const introElapsed = effectiveElapsedMs(
+        now,
+        gameStartedAt,
+        countdownPausedAt,
+        countdownPausedAccumMs,
+      );
+      const introT = Math.min(1, introElapsed / (introDuration * 1000));
       // Easing: cubic ease-in-out
       const eased =
         introT < 0.5 ? 4 * introT * introT * introT : 1 - Math.pow(-2 * introT + 2, 3) / 2;
@@ -2213,9 +2911,12 @@ function renderGame(): void {
       const lookY = introStartLook.y + (1.5 - introStartLook.y) * eased;
       const lookZ = introStartLook.z + (selfMesh.position.z - introStartLook.z) * eased;
       ctx.camera.lookAt(lookX, lookY, lookZ);
+      player.update(dt);
+      syncNetwork();
+      return;
+    }
 
-      // 캐릭터 미세 호흡 (살아있는 느낌) 정도만
-      // v28: rain/네온 OFF
+    if (paused) {
       return;
     }
     // 2026-08-15: 라운드 종료 후 — 입력/물리 정지
@@ -2230,7 +2931,7 @@ function renderGame(): void {
         const elapsed = GAME.roundSeconds - roundTime;
         if (elapsed < 4.5) {
           const tipText = isTagger
-            ? 'WASD 이동 · F 사격 · Space 부스터 · Shift 대시'
+            ? 'WASD 이동 · F 그물 · Space 부스터 · Shift 대시'
             : 'WASD 이동 · E 자국 흡수 · F 술래 동결 · Shift 대시';
           showActionPrompt(tipText, '🎮', '#2a1a4a');
         }
@@ -2240,42 +2941,39 @@ function renderGame(): void {
         graceTimeLeft -= dt;
         if (graceTimeLeft <= 0) {
           graceTimeLeft = 0;
-          if (taggerAI) taggerAI.setFrozen(false);
+          if (taggerAI && taggerStunLeft <= 0) taggerAI.setFrozen(false);
         }
       }
 
       // 2026-08-15 v4: 액션 프롬프트 — 맥락별 안내 (3초 표시)
       // - 도망자: 자국 위 / 얼림 사거리 내
-      // - 술래: 사격 사거리 내 / 부스터 준비
+      // - 술래: 그물 사거리 내 / 부스터 준비
       if (!isTagger) {
         // 자국 위 (E 흡수)
         const q = trails.queryNearest(selfMesh.position, 1.5);
         if (q.hit && !absorb.isAbsorbing() && absorb.getCooldown() <= 0) {
           showActionPrompt('자국 흡수', 'E', '#54f0b1');
-        } else if (ice.isReady() && aiMesh) {
-          // 얼림 사거리 내
-          const dx = selfMesh.position.x - aiMesh.position.x;
-          const dz = selfMesh.position.z - aiMesh.position.z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
+        } else if (ice.isReady() && taggerMesh !== selfMesh) {
+          const dist = distVecToTagger();
           if (dist <= GAME.iceRange) {
             showActionPrompt('술래 동결', 'F', '#66e0ff');
           }
         }
       } else if (isTagger) {
-        // 사격 가능 (F 또는 클릭)
-        if (!shotState.active && shotState.cooldownLeft <= 0) {
-          if (aiMesh) {
-            const dx = aiMesh.position.x - selfMesh.position.x;
-            const dz = aiMesh.position.z - selfMesh.position.z;
-            const dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist <= GAME.shotRange) {
-              const isAimingNow = isAiming;
-              showActionPrompt(
-                isAimingNow ? '조준 중 — 떼면 발사' : '포박줄 사격',
-                isAimingNow ? 'F' : 'F·클릭',
-                '#ff3a5c',
-              );
-            }
+        if (!shotState.active && !shotState.zone && shotState.cooldownLeft <= 0) {
+          const nearRunner = bots.find((b) => {
+            if (b.out || b.role !== 'runner') return false;
+            const dx = b.mesh.position.x - selfMesh.position.x;
+            const dz = b.mesh.position.z - selfMesh.position.z;
+            return Math.hypot(dx, dz) <= GAME.shotRange;
+          });
+          if (nearRunner) {
+            const isAimingNow = isAiming;
+            showActionPrompt(
+              isAimingNow ? '조준 중 — 떼면 그물' : '그물 던지기',
+              isAimingNow ? 'F' : 'F·클릭',
+              '#ffe14a',
+            );
           }
         }
         // 부스터 준비
@@ -2287,26 +2985,8 @@ function renderGame(): void {
       roundTime -= dt;
       if (roundTime <= 0) {
         roundTime = 0;
-        // 시간 초과 → 술래 승리 (1:1 모드)
-        showResult('tagger', '시간 초과');
+        checkTrailWin();
         return;
-      }
-      // 출구 도달 판정 (도망자만)
-      if (!isTagger) {
-        const dx = selfMesh.position.x - exitPos.x;
-        const dz = selfMesh.position.z - exitPos.z;
-        const d2 = dx * dx + dz * dz;
-        if (d2 <= exitRadius * exitRadius) {
-          escapeHoldTime += dt;
-          if (escapeHoldTime >= GAME.exitHoldSeconds) {
-            // 탈출 성공
-            showResult('runner', '출구에 도달했습니다');
-            return;
-          }
-        } else {
-          // 출구에서 벗어남 → 누적 시간 리셋
-          escapeHoldTime = 0;
-        }
       }
     }
 
@@ -2332,6 +3012,7 @@ function renderGame(): void {
       // 2026-08-15: 슬로모 (OUT 시) — 게임 상태만 슬로우, 시각 효과는 정상
       const effectiveDt = slowmoActive ? dt * SLOWMO_FACTOR : dt;
       player.update(effectiveDt);
+      syncNetwork();
 
       // 2026-08-15: 이동 바운스 — 속도 비례 phase 진행 + sin |sin|로 항상 양수
       // 흡수 중에는 발자국 정지 (정지 상태 유지)
@@ -2349,97 +3030,264 @@ function renderGame(): void {
         const idleBob = Math.sin(bobPhase * 0.5) * 0.02;
         selfMesh.position.y = baseY + idleBob + (selfMesh.position.y - baseY - idleBob) * 0.85;
       }
-      if (taggerAI) taggerAI.update(effectiveDt);
-      if (runnerAI) runnerAI.update(effectiveDt);
+      if (roundState === 'playing' && !game.out) {
+        const got = itemField.tryPickup(selfMesh.position.x, selfMesh.position.z);
+        if (got) {
+          paintItemSlot();
+          sound.playAbsorbStart();
+        }
+      }
+      itemField.update(effectiveDt);
+      if (jellyLeft > 0) jellyLeft = Math.max(0, jellyLeft - effectiveDt);
+      if (smokeLeft > 0) {
+        smokeLeft = Math.max(0, smokeLeft - effectiveDt);
+        smokeCloud.visible = true;
+        smokeCloud.position.set(selfMesh.position.x, 0, selfMesh.position.z);
+        for (const puff of smokePuffs) {
+          const ang = puff.phase + t * 1.3;
+          const bob = 0.55 + Math.abs(Math.sin(t * 2.2 + puff.phase)) * 0.7;
+          puff.mesh.position.set(
+            Math.cos(ang) * puff.orbit,
+            bob,
+            Math.sin(ang * 0.85) * puff.orbit,
+          );
+          const s = 1.1 + 0.25 * Math.sin(t * 3 + puff.phase);
+          puff.mesh.scale.setScalar(s);
+          const mat = puff.mesh.material as THREE.MeshBasicMaterial;
+          mat.opacity = 0.22 + 0.2 * (0.5 + 0.5 * Math.sin(t * 2.4 + puff.phase));
+        }
+        if (smokeLeft <= 0) {
+          smokeCloud.visible = false;
+          setSelfHidden(false);
+          chasePrey = undefined;
+          for (const bot of bots) {
+            bot.taggerAI?.breakChase(selfMesh.position);
+            bot.taggerAI?.setChaseEnabled(true);
+          }
+          taggerStunLeft = GAME.itemSmokeForgetSeconds;
+          taggerAI?.setFrozen(true);
+        }
+      }
+      const playerSlow = itemField.isInSticky(selfMesh.position.x, selfMesh.position.z);
+      player.setExtraSpeedMul(
+        playerSlow ? GAME.itemStickySlowMul : jellyLeft > 0 ? GAME.itemJellySpeedMul : 1,
+      );
+      const preyPoints: Array<{ x: number; z: number; mesh: THREE.Object3D; isPlayer: boolean }> =
+        [];
+      if (!isTagger && !game.out) {
+        preyPoints.push({
+          x: selfMesh.position.x,
+          z: selfMesh.position.z,
+          mesh: selfMesh,
+          isPlayer: true,
+        });
+      }
+      for (const bot of bots) {
+        if (bot.out || bot.role !== 'runner') continue;
+        preyPoints.push({
+          x: bot.mesh.position.x,
+          z: bot.mesh.position.z,
+          mesh: bot.mesh,
+          isPlayer: false,
+        });
+      }
+      if (taggerStunLeft > 0) {
+        taggerStunLeft = Math.max(0, taggerStunLeft - effectiveDt);
+        if (taggerStunLeft <= 0 && graceTimeLeft <= 0) taggerAI?.setFrozen(false);
+      }
+      if (taggerAI && smokeLeft <= 0) {
+        const locked = chasePrey;
+        const currentPrey = locked ? preyPoints.find((p) => p.mesh === locked.mesh) : undefined;
+        const sticky = pickStickyPoint(
+          taggerMesh.position.x,
+          taggerMesh.position.z,
+          preyPoints,
+          currentPrey,
+          GAME.taggerChaseSwitchMargin,
+        );
+        const distToSticky = sticky
+          ? Math.hypot(sticky.x - taggerMesh.position.x, sticky.z - taggerMesh.position.z)
+          : Infinity;
+        const acquire = currentPrey
+          ? distToSticky <= GAME.taggerLoseRange
+          : distToSticky <= GAME.taggerDetectRange;
+        if (sticky && acquire) {
+          chasePrey = sticky;
+          taggerAI.setTarget(sticky.mesh);
+        } else {
+          chasePrey = undefined;
+          taggerAI.setTarget(undefined);
+        }
+      } else if (taggerAI && smokeLeft > 0) {
+        chasePrey = undefined;
+        taggerAI.setTarget(undefined);
+      }
+      for (const bot of bots) {
+        if (bot.out) continue;
+        const slow = itemField.isInSticky(bot.mesh.position.x, bot.mesh.position.z);
+        bot.taggerAI?.setExtraSpeedMul(slow ? GAME.itemStickySlowMul : 1);
+        bot.runnerAI?.setExtraSpeedMul(slow ? GAME.itemStickySlowMul : 1);
+        if (roundState === 'playing' && graceTimeLeft <= 0 && taggerStunLeft <= 0)
+          bot.taggerAI?.update(effectiveDt);
+        bot.runnerAI?.update(effectiveDt);
+      }
+      if (
+        !isTagger &&
+        taggerAI &&
+        roundState === 'playing' &&
+        !game.out &&
+        graceTimeLeft <= 0 &&
+        !ice.blocksCatch() &&
+        smokeLeft <= 0
+      ) {
+        const hits = contactsInRange(
+          taggerMesh.position.x,
+          taggerMesh.position.z,
+          preyPoints,
+          GAME.taggerContactDistance,
+        );
+        const playerHit = hits.find((p) => p.isPlayer);
+        const liveHumans = matchEntry === 'room' && (net?.players.length ?? 0) >= 2;
+        if (liveHumans && isTagger) {
+          for (const prey of hits) {
+            const hitBot = bots.find((b) => b.mesh === prey.mesh);
+            if (hitBot?.kind === 'remote' && !hitBot.out) net?.sendCatch(hitBot.id);
+          }
+        }
+        if (playerHit) {
+          if (absorb && absorb.isInvulnerable()) {
+            absorb.consumeInvulnerability();
+            triggerShake(0.3);
+            sound.playBoost();
+          } else if (!liveHumans) {
+            sound.playOut();
+            roundStats.outCount += 1;
+            showResult('tagger', '술래에게 잡혔습니다');
+          }
+        } else if (taggerStunLeft <= 0 && !liveHumans) {
+          let tagged = false;
+          for (const prey of hits) {
+            const hitBot = bots.find((b) => b.mesh === prey.mesh);
+            if (!hitBot || hitBot.out) continue;
+            hitBot.out = true;
+            hitBot.material.transparent = true;
+            hitBot.material.opacity = 0.3;
+            hitBot.mesh.scale.set(0.6, 0.4, 0.6);
+            roundStats.outCount += 1;
+            tagged = true;
+            if (dust) dust.burst(hitBot.mesh.position, 20, 1.0, 2.0, 2.5, 0.6);
+          }
+          if (tagged) {
+            sound.playOut();
+            triggerShake(0.35);
+            taggerStunLeft = GAME.taggerCatchStunSeconds;
+            chasePrey = undefined;
+            taggerAI?.setFrozen(true);
+            taggerAI?.setTarget(undefined);
+            const alive =
+              (!isTagger && !game.out ? 1 : 0) +
+              bots.filter((b) => b.role === 'runner' && !b.out).length;
+            if (alive === 0) showResult('tagger', '도망자를 모두 잡았습니다');
+          }
+        }
+      }
       if (boost) boost.update(effectiveDt);
       trails.update(effectiveDt, t);
       ice.update(effectiveDt);
+      if (roundState === 'playing' && !game.out) {
+        for (const bot of bots) {
+          if (bot.out || bot.role !== 'runner') continue;
+          const onTrail = trails.queryNearest(bot.mesh.position, 1.5).hit;
+          if (onTrail) {
+            bot.absorbHold += effectiveDt;
+            if (bot.absorbHold >= GAME.absorbSeconds) {
+              trails.consumeNearest(bot.mesh.position, 1.5);
+              bot.absorbHold = 0;
+              addTrailScore(1);
+            }
+          } else {
+            bot.absorbHold = 0;
+          }
+        }
+      }
 
       // === v33: 캐릭터 간 충돌 분리 — 떨림/합체 방지 ===
       // - 두 메시(자기/AI)가 가까이 붙으면 서로 밀어냄 (충돌 반경 = 반지름 합)
       // - 한쪽이 frozen이면 안 움직임 (얼려진 도망자는 못 밀어냄 — 잡힘)
       // - 부스터 중에는 살짝 더 강한 분리 (관성 표현)
-      if (aiMesh && !game.out) {
-        const dx = selfMesh.position.x - aiMesh.position.x;
-        const dz = selfMesh.position.z - aiMesh.position.z;
-        const distSq = dx * dx + dz * dz;
-        const minDist = PLAYER.radius * 2 + 0.15; // 캡슐 반지름 합 + 약간의 여유
-        if (distSq < minDist * minDist && distSq > 1e-6) {
-          const dist = Math.sqrt(distSq);
-          const overlap = minDist - dist;
-          const nx = dx / dist;
-          const nz = dz / dist;
-          // 양쪽 동일하게 밀어냄. 단 frozen/얼려진 쪽은 안 움직임.
-          const selfFrozen = player.isFrozen() || ice.isActive() || slowmoActive;
-          // ice.isActive()는 술래를 얼리는 거라 도망자만 영향, 여기선 도망자=자기자신이 얼려진 경우
-          if (!selfFrozen) {
-            selfMesh.position.x += nx * overlap * 0.5;
-            selfMesh.position.z += nz * overlap * 0.5;
+      if (!game.out) {
+        const selfR = !isTagger ? 0.4 : 0.6;
+        for (const bot of bots) {
+          if (bot.out) continue;
+          const dx = selfMesh.position.x - bot.mesh.position.x;
+          const dz = selfMesh.position.z - bot.mesh.position.z;
+          const distSq = dx * dx + dz * dz;
+          const minDist = PLAYER.radius * 2 + 0.15;
+          if (distSq < minDist * minDist && distSq > 1e-6) {
+            const dist = Math.sqrt(distSq);
+            const overlap = minDist - dist;
+            const nx = dx / dist;
+            const nz = dz / dist;
+            const selfFrozen = player.isFrozen() || ice.isActive() || slowmoActive;
+            if (!selfFrozen) {
+              selfMesh.position.x += nx * overlap * 0.5;
+              selfMesh.position.z += nz * overlap * 0.5;
+            }
+            bot.mesh.position.x -= nx * overlap * 0.5;
+            bot.mesh.position.z -= nz * overlap * 0.5;
+            const aiR = bot.role === 'tagger' ? 0.5 : 0.4;
+            const selfFree = moveCircle(
+              selfMesh.position.x,
+              selfMesh.position.z,
+              0,
+              0,
+              selfR,
+              mapObstacles,
+              { halfWidth: mapHalfW, halfDepth: mapHalfD },
+            );
+            selfMesh.position.x = selfFree.x;
+            selfMesh.position.z = selfFree.z;
+            const aiFree = moveCircle(
+              bot.mesh.position.x,
+              bot.mesh.position.z,
+              0,
+              0,
+              aiR,
+              mapObstacles,
+              { halfWidth: mapHalfW, halfDepth: mapHalfD },
+            );
+            bot.mesh.position.x = aiFree.x;
+            bot.mesh.position.z = aiFree.z;
           }
-          // AI는 taggerAI/runnerAI의 update로 위치가 갱신되므로, 직접 보정하지 않고
-          // 다음 프레임의 update에서 자연스럽게 분리되도록 함.
-          // 대신 aiMesh의 위치를 살짝 보정해서 시각적 떨림 방지:
-          aiMesh.position.x -= nx * overlap * 0.5;
-          aiMesh.position.z -= nz * overlap * 0.5;
         }
       }
 
-      // === 2026-08-15: 포박줄 발사체 업데이트 + 도망자 충돌 체크 ===
-      // - 매 프레임 발사체 이동
-      // - 사거리 초과 또는 도망자 충돌 시 disposeShot
-      // - 도망자 충돌 시 OUT (사용자 의도: "몸에 닿는 거 말고 포박줄")
       if (shotState.cooldownLeft > 0) shotState.cooldownLeft -= dt;
       if (shotState.active && shotState.mesh) {
         const move = GAME.shotSpeed * dt;
         shotState.traveled += move;
         shotState.mesh.position.addScaledVector(shotState.direction, move);
-
-        if (shotState.traveled >= GAME.shotRange) {
-          // 사거리 초과
+        const flightT = Math.min(1, shotState.traveled / GAME.shotRange);
+        shotState.mesh.position.y = THREE.MathUtils.lerp(shotState.originY, 0.12, flightT);
+        const radius = currentNetRadius();
+        shotState.mesh.scale.setScalar(radius);
+        shotState.mesh.rotation.y += dt * 5;
+        const hit = isTagger
+          ? tryNetCatchAt(shotState.mesh.position.x, shotState.mesh.position.z, radius)
+          : false;
+        if (hit) {
           disposeShot();
-        } else if (isTagger && aiMesh) {
-          // 도망자 충돌 체크 (selfMesh=술래, aiMesh=도망자)
-          shotHitTmp.subVectors(aiMesh.position, shotState.mesh.position);
-          const dist2 = shotHitTmp.lengthSq();
-          const hitR = GAME.shotRadius + PLAYER.radius * GAME.taggerScale;
-          if (dist2 < hitR * hitR) {
-            // 충돌 — OUT
-            if (absorb && absorb.isInvulnerable()) {
-              // 2026-08-15: 흡수 후 가속 중이면 1회 무적 (포박줄도 무적)
-              absorb.consumeInvulnerability();
-              triggerShake(0.3);
-              if (dust) dust.burst(aiMesh.position, 20, 1.0, 2.0, 2.5, 0.6);
-              sound.playBoost();
-            } else {
-              triggerShake(0.6);
-              sound.playOut();
-              roundStats.outCount += 1;
-              // 2026-08-15: 도망자 시각 효과 (작아지고 반투명) — 발사체에 맞은 거 시각화
-              if (aiMaterial) {
-                aiMaterial.opacity = 0.3;
-                aiMaterial.transparent = true;
-              }
-              if (aiMesh) aiMesh.scale.set(0.6, 0.4, 0.6);
-              // OUT 슬로모 + 흑백 (연출)
-              slowmoTime = 0.7;
-              slowmoActive = true;
-              if (canvasHost) canvasHost.classList.add('slowmo');
-              trackTimeout(() => {
-                if (canvasHost) canvasHost.classList.remove('slowmo');
-                slowmoActive = false;
-              }, 700);
-              // v8: 게임 일시정지 (player 안 움직이게) + 결과만 표시
-              // - showOut 오버레이는 스킵 (결과 화면에 통합)
-              // - showResult만 호출 (승/패 + 통계 + retry/lobby)
-              game.out = true;
-              game.outReason = '술래의 포박줄에 걸렸습니다';
-              if (absorb) absorb.reset();
-              if (player.isAbsorbing()) player.setAbsorbing(false);
-              showResult('tagger', '술래의 포박줄에 걸렸습니다');
-            }
-            disposeShot();
-          }
+        } else if (shotState.traveled >= GAME.shotRange) {
+          dropNetZone(shotState.mesh.position.x, shotState.mesh.position.z, radius);
         }
+      }
+      if (shotState.zone) {
+        shotState.zone.timeLeft -= dt;
+        const pulse = 1 + 0.06 * Math.sin(t * 14);
+        shotState.zone.mesh.scale.setScalar(shotState.zone.radius * pulse);
+        shotState.zone.mesh.rotation.y += dt * 2.4;
+        if (isTagger) tryNetCatchAt(shotState.zone.x, shotState.zone.z, shotState.zone.radius);
+        if (shotState.zone.timeLeft <= 0) disposeNetZone();
       }
 
       // === OUT 판정 (구버전 — 2026-08-15 v6: 포박줄로 대체되어 제거) ===
@@ -2531,23 +3379,24 @@ function renderGame(): void {
       }
     }
 
-    // 2026-08-15: 포박줄 쿨다운 HUD 업데이트
     if (shotBar && shotFill && shotStatus) {
       if (shotState.active) {
-        // 발사체 비행 중
         const remain = 1 - shotState.traveled / GAME.shotRange;
         shotFill.style.width = `${remain * 100}%`;
         shotFill.classList.remove('critical');
-        shotStatus.textContent = '발사 중';
+        shotStatus.textContent = '그물 비행';
+        shotStatus.className = 'boost-status boosting';
+      } else if (shotState.zone) {
+        const ratio = shotState.zone.timeLeft / GAME.shotNetZoneSeconds;
+        shotFill.style.width = `${ratio * 100}%`;
+        shotStatus.textContent = '그물 펼침';
         shotStatus.className = 'boost-status boosting';
       } else if (shotState.cooldownLeft > 0) {
-        // 쿨다운
         const ratio = 1 - shotState.cooldownLeft / GAME.shotCooldown;
         shotFill.style.width = `${ratio * 100}%`;
         shotStatus.textContent = `쿨다운 ${shotState.cooldownLeft.toFixed(1)}s`;
         shotStatus.className = 'boost-status cooldown';
       } else {
-        // 준비
         shotFill.style.width = '100%';
         shotStatus.textContent = '준비 (F / 클릭)';
         shotStatus.className = 'boost-status ready';
@@ -2597,55 +3446,59 @@ function renderGame(): void {
       if (absorb && absorb.isAbsorbing()) {
         absorbProgress.style.width = `${absorb.getProgress() * 100}%`;
         absorbHud.classList.add('active');
-        absorbLabel.textContent = `흡수 중... (${(absorb.getProgress() * 100).toFixed(0)}%)`;
+        absorbLabel.textContent = mobileMode
+          ? `${(absorb.getProgress() * 100).toFixed(0)}%`
+          : `흡수 중... (${(absorb.getProgress() * 100).toFixed(0)}%)`;
       } else if (absorb && absorb.getBoostRemaining() > 0) {
         absorbProgress.style.width = `${(absorb.getBoostRemaining() / GAME.boostSeconds) * 100}%`;
         absorbHud.classList.add('boost');
         absorbHud.classList.remove('active');
-        absorbLabel.textContent = `가속! ${absorb.getBoostRemaining().toFixed(1)}초`;
+        absorbLabel.textContent = mobileMode
+          ? `${absorb.getBoostRemaining().toFixed(0)}s`
+          : `가속! ${absorb.getBoostRemaining().toFixed(1)}초`;
       } else if (absorb && absorb.getCooldown() > 0) {
         absorbHud.classList.remove('active', 'boost');
-        absorbLabel.textContent = `재사용 대기 ${absorb.getCooldown().toFixed(1)}초`;
+        absorbLabel.textContent = mobileMode
+          ? `${absorb.getCooldown().toFixed(0)}s`
+          : `재사용 대기 ${absorb.getCooldown().toFixed(1)}초`;
       } else {
         absorbHud.classList.remove('active', 'boost');
-        // 자국 위에 있는지 표시
         const query = trails.queryNearest(selfMesh.position, 1.5);
         if (query.hit) {
-          absorbLabel.textContent = '자국 흡수 (E) — 준비';
+          absorbLabel.textContent = mobileMode ? '흡수' : '자국 흡수 (E) — 준비';
         } else {
-          absorbLabel.textContent = '자국 흡수 (E) — 자국 위에 서세요';
+          absorbLabel.textContent = mobileMode ? '흡수' : '자국 흡수 (E) — 자국 위에 서세요';
         }
       }
     }
 
-    // v6: 조이스틱 자동 복귀 (떼면 0)
     if (joystick) joystick.tick();
+    if (lookStick) {
+      const axes = lookStick.getAxes();
+      if (axes.yaw !== 0 || axes.pitch !== 0) {
+        const look = lookDeltaFromAxes(axes.yaw, axes.pitch, dt);
+        camState.yawTarget = wrapAngle(camState.yawTarget + look.dYaw);
+        camState.pitchTarget = Math.max(
+          CAM_LIMITS.pitchMin,
+          Math.min(CAM_LIMITS.pitchMax, camState.pitchTarget + look.dPitch),
+        );
+      }
+    }
 
-    // 카메라 팔로우 (플레이어 등 뒤에서 따라옴) + 2026-08-15 사용자 회전/줌
-    // 0) 2026-08-15 v2: yaw/pitch smoothing — target → actual lerp
-    //    마우스 드래그 끝나도 카메라가 부드럽게 따라옴 (확확 안 넘어감)
-    camState.yaw += (camState.yawTarget - camState.yaw) * CAM_ROT_SMOOTHING;
+    camState.yaw = wrapAngle(
+      camState.yaw + shortestAngle(camState.yaw, camState.yawTarget).delta * CAM_ROT_SMOOTHING,
+    );
     camState.pitch += (camState.pitchTarget - camState.pitch) * CAM_ROT_SMOOTHING;
 
-    // 1) 카메라 facing = 월드 -Z 고정 (캐릭터 진행 방향과 분리)
-    //    WASD는 카메라 facing 기준으로 이동하므로, 캐릭터가 회전해도 카메라는 안 돌아감
     cameraFacing.set(0, 0, -1);
 
-    // 1.4) 2026-08-15 v3: chase 모드 — 카메라가 캐릭터 진행 방향 자동 추적
-    // - 캐릭터가 움직이는 방향으로 카메라 yaw가 천천히 따라옴
-    // - 사용자가 드래그하면 orbit 모드로 자동 전환
-    if (camState.mode === 'chase') {
-      const moveDx2 = selfMesh.position.x - prevPos.x;
-      const moveDz2 = selfMesh.position.z - prevPos.z;
-      const movedNow = Math.sqrt(moveDx2 * moveDx2 + moveDz2 * moveDz2);
-      if (movedNow > 0.05) {
-        // 캐릭터 진행 방향의 yaw (월드)
-        const charYaw = Math.atan2(moveDx2, moveDz2);
-        // 카메라 facing이 -Z에서 시작하므로, 카메라가 보는 방향의 yaw = charYaw
-        // 카메라 yaw는 "월드 -Z에서 얼마나 회전했나"이므로
-        // charYaw (월드 forward = 0, 진행 방향) → camYaw
-        camState.yawTarget = charYaw;
-      }
+    if (camState.mode === 'chase' && !mobileMode) {
+      const chaseYaw = chaseYawFromMovement(
+        selfMesh.position.x - prevPos.x,
+        selfMesh.position.z - prevPos.z,
+        0.12,
+      );
+      if (chaseYaw !== null) camState.yawTarget = chaseYaw;
     }
 
     // 1.5) yaw 회전 (사용자 우클릭 드래그) — 월드 Y축 기준
@@ -2775,8 +3628,11 @@ function renderGame(): void {
     // 2026-08-15: 3D 방향 인디케이터 업데이트
     // - 타겟 마커: AI 머리 위 따라가며 펄스 (위아래 흔들)
     // - 그레이스 중에는 빨갛게 깜빡임 (술래 동결 중 표시)
-    targetMarker.position.x = aiMesh.position.x;
-    targetMarker.position.z = aiMesh.position.z;
+    const markTarget = !isTagger
+      ? taggerMesh
+      : (bots.find((b) => !b.out && b.role === 'runner')?.mesh ?? taggerMesh);
+    targetMarker.position.x = markTarget.position.x;
+    targetMarker.position.z = markTarget.position.z;
     targetGlow.position.copy(targetMarker.position);
     const pulseY = Math.sin(t * 4) * 0.18;
     targetMarker.position.y = 2.2 + pulseY;
@@ -2797,7 +3653,7 @@ function renderGame(): void {
       glowMat.color.setHex(targetMarkerColor);
     }
 
-    // 2026-08-15: 사격 조준선 (Space 홀딩) — 술래가 조준 방향 확인용
+    // 그물 조준선 (F 홀딩)
     if (aimLaser && aimLaserMat && isTagger) {
       if (isAiming && !game.out && roundState === 'playing') {
         const dir = getAimDirection();
@@ -2824,6 +3680,7 @@ function renderGame(): void {
   game.boost = boost;
   game.boostKeyHandler = boostKeyHandler;
   game.joystick = joystick;
+  game.lookStick = lookStick;
   game.dust = dust;
 }
 
@@ -2885,6 +3742,8 @@ function teardownGame(): void {
   game.boost = null;
   game.joystick?.unmount();
   game.joystick = null;
+  game.lookStick?.unmount();
+  game.lookStick = null;
   game.tagger = null;
   game.speedButtons = [];
   game.speedStatus = null;
