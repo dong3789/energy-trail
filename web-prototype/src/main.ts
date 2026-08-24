@@ -268,10 +268,29 @@ function trackTimeout(callback: () => void, ms: number): number {
 function setScreen(next: Screen): void {
   // 게임 화면을 떠날 때 Three.js 자원 정리
   if (screen === 'game' && next !== 'game') {
-    teardownGame();
+    try {
+      teardownGame();
+    } catch (err) {
+      // Pass 8.3: teardown 실패는 메모리 누수 정도이므로 다음 setScreen 에서 재시도
+      console.error('[setScreen] teardownGame threw:', err);
+    }
   }
   screen = next;
-  render();
+  try {
+    render();
+  } catch (err) {
+    // Pass 8.3: render 실패 (WebGL/Three.js 초기화 에러) 시 게임 화면이
+    // 반쪽짜리로 남는 문제 방지 — 로비로 강제 복귀
+    console.error('[setScreen] render() threw:', err, err instanceof Error ? err.stack : '');
+    if (next === 'game') {
+      screen = 'lobby';
+      try {
+        render();
+      } catch {
+        // 로비 렌더도 실패하면 더 이상 복구 불가 — 콘솔에 로그만 남기고 중단
+      }
+    }
+  }
 }
 
 function button(label: string, action: () => void, className = ''): HTMLButtonElement {
@@ -2910,6 +2929,8 @@ function render(): void {
       renderRoom();
       break;
     case 'game':
+      // Pass 8.3: renderGame throw 시 setScreen 의 try/catch 가 잡아서
+      // 로비로 강제 복귀시킴 — 게임 화면 반쪽짜리 상태 방지
       renderGame();
       break;
   }

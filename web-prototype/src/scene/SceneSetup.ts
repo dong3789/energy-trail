@@ -124,14 +124,31 @@ export function startRenderLoop(
 ): () => void {
   const clock = new THREE.Clock();
   let running = true;
+  let errorLogged = false;
 
   function tick(): void {
     if (!running) return;
     requestAnimationFrame(tick);
     const delta = clock.getDelta();
     const elapsed = clock.getElapsedTime();
-    update(delta, elapsed);
-    ctx.renderer.render(ctx.scene, ctx.camera);
+    // Pass 8.3: update / render 예외가 한 프레임 throw 해도 rAF는 이미 예약됐으므로
+    // 다음 프레임에서 회복. 게임 로직 throw 가 게임 전체 정지로 이어지지 않도록 격리.
+    try {
+      update(delta, elapsed);
+    } catch (err) {
+      if (!errorLogged) {
+        errorLogged = true;
+        console.error('[renderLoop] update() threw (이후 동일 에러는 throttle):', err);
+      }
+    }
+    try {
+      ctx.renderer.render(ctx.scene, ctx.camera);
+    } catch (err) {
+      if (!errorLogged) {
+        errorLogged = true;
+        console.error('[renderLoop] renderer.render() threw (이후 throttle):', err);
+      }
+    }
   }
   tick();
 

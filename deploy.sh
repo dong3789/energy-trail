@@ -51,6 +51,8 @@ docker run -d \
   --network proxy_net \
   --restart unless-stopped \
   -v "$REPO_ROOT/web-prototype/dist:/usr/share/nginx/html:ro" \
+  --label "caddy=http://trail.yndl.dev" \
+  --label "caddy.reverse_proxy={{upstreams 80}}" \
   energy-trail:latest > /dev/null
 
 # 5) 컨테이너 헬스체크
