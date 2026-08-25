@@ -133,6 +133,12 @@ function tickPlaying(room) {
   }
   const taggers = [...room.players.values()].filter((p) => p.role === 'tagger' && !p.out);
   const runners = [...room.players.values()].filter((p) => p.role === 'runner' && !p.out);
+  // 2026-08-25: 술래가 매치 중 이탈하면 라운드가 끝나지 않고 타이머 만료 뒤
+  // "나간 술래 승리"로 처리되던 문제 — 술래가 없으면 즉시 도망자 승으로 종료
+  if (taggers.length === 0) {
+    endRoom(room, 'runner', '술래가 방을 나갔습니다');
+    return;
+  }
   if (runners.length === 0 && taggers.length > 0) {
     endRoom(room, 'tagger', '도망자를 모두 잡았습니다');
     return;
@@ -178,9 +184,6 @@ function leave(ws) {
   }
   if (player.id === room.hostId) {
     room.hostId = [...room.players.keys()][0];
-  }
-  if (room.phase === 'playing' && player.role === 'runner') {
-    player.out = true;
   }
   broadcast(room, roomPayload(room));
 }
