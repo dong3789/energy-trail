@@ -254,6 +254,16 @@ async function ensureNet(): Promise<NetClient | null> {
     return null;
   }
   net = client;
+  // 2026-08-25: 연결 끊김 시 유저에게 알리고 멀티플레이 세션은 로비로 복귀.
+  // 솔로 플레이 중이면 게임을 유지하고 끊긴 연결만 정리 (다음 ensureNet에서 재연결).
+  client.onDisconnect = () => {
+    showNetToast('연결이 끊어졌어요');
+    if (matchEntry === 'room') {
+      leaveToLobby();
+    } else {
+      net = null;
+    }
+  };
   return client;
 }
 
@@ -386,6 +396,16 @@ function leaveToLobby(): void {
   net = null;
   roomJoined = matchEntry !== 'room';
   setScreen('lobby');
+}
+
+function showNetToast(msg: string): void {
+  const toast = document.createElement('div');
+  toast.className = 'net-toast';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.remove();
+  }, 4000);
 }
 
 function restartMatch(): void {
