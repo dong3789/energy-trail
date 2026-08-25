@@ -409,7 +409,7 @@ wss.on('connection', (ws) => {
       if (typeof msg.yaw === 'number') player.yaw = msg.yaw;
       return;
     }
-    if (t === 'score' && room.phase === 'playing' && player.role === 'runner' && !player.out) {
+    if (t === 'score' && room.phase === 'playing' && player.role === 'runner' && !player.out && typeof msg.n === 'number' && Number.isFinite(msg.n)) {
       room.score += 1;
       broadcast(room, { t: 'score', n: room.score });
       if (room.score >= TRAIL_GOAL) endRoom(room, 'runner', `자국 ${TRAIL_GOAL}개 수집`);
