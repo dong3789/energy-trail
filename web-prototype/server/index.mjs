@@ -477,11 +477,22 @@ wss.on('connection', (ws) => {
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
+    // 2026-08-25: 룸 TTL 처리 — phase가 'lobby'이고 생성 후 2시간 지나면 삭제.
+    // rooms.delete 도중에 같은 룸을 tickPlaying가 참조하지 않도록 continue로 분리.
     if (now - room.createdAt > ROOM_TTL_MS && room.phase === 'lobby') {
       rooms.delete(code);
       continue;
     }
-    if (room.phase === 'playing') tickPlaying(room);
+    if (room.phase === 'playing') {
+      // 2026-08-25: 한 룸의 tick 예외가 다른 룸의 tick과 setInterval 자체를 죽이지 않도록 격리.
+      // uncaughtException 핸들러는 있지만 동기 throw를 먼저 잡아 로그 노이즈를 줄이고
+      // 다른 활성 매치가 계속 진행되도록 보장.
+      try {
+        tickPlaying(room);
+      } catch (err) {
+        console.error('[tick] room', code, 'threw:', err);
+      }
+    }
   }
 }, TICK_MS);
 
