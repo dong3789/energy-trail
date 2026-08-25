@@ -2780,9 +2780,14 @@ function renderGame(): void {
       return true;
     }
     // 마지막 10초
-    // - roundStats.startedAt (performance.now() 기준)을 Date.now()로 변환해 left 추정
-    // - startedAt=0 이면 아직 시작 안 됨 (라운드 시작 전)
-    if (roundStats.startedAt > 0) {
+    // - net.lastLeftSec (서버 권위, Math.ceil)이 있으면 우선 사용
+    // - 없으면 roundStats.startedAt 기반 추정 (라운드 시작 전 또는 메시지 아직 못 받음)
+    if (net && net.lastLeftSec >= 0) {
+      if (net.lastLeftSec <= GAME.reviveNoLastSeconds) {
+        flashReviveDeny('마지막 10초엔 불가');
+        return true;
+      }
+    } else if (roundStats.startedAt > 0) {
       const perfNow = performance.now();
       const startedAtDateMs = Date.now() - (perfNow - roundStats.startedAt);
       const elapsed = (Date.now() - startedAtDateMs) / 1000;
@@ -3481,6 +3486,13 @@ function renderGame(): void {
       }
 
       roundTime -= dt;
+      // 2026-08-25: 서버 lastLeftSec 보정 — 클라 시계가 RAF/탭 백그라운드 등으로
+      // drift하면 서버 권위 값으로 즉시 동기화. 1초 이상 차이날 때만 보정해
+      // Math.ceil 특성상 매 프레임 미세 흔들림은 무시. 솔로는 lastLeftSec=-1 유지.
+      if (net && net.lastLeftSec >= 0) {
+        const drift = roundTime - net.lastLeftSec;
+        if (drift > 1 || drift < -1) roundTime = net.lastLeftSec;
+      }
       if (roundTime <= 0) {
         roundTime = 0;
         checkTrailWin();
