@@ -129,7 +129,9 @@ export function startRenderLoop(
   function tick(): void {
     if (!running) return;
     requestAnimationFrame(tick);
-    const delta = clock.getDelta();
+    // 2026-08-25: dt 클램프 — 탭 복귀 등으로 getDelta()가 큰 값을 반환해도
+    // 타이머/물리가 배경 시간만큼 한 프레임에 점프하지 않도록 50ms로 제한
+    const delta = Math.min(clock.getDelta(), 0.05);
     const elapsed = clock.getElapsedTime();
     // Pass 8.3: update / render 예외가 한 프레임 throw 해도 rAF는 이미 예약됐으므로
     // 다음 프레임에서 회복. 게임 로직 throw 가 게임 전체 정지로 이어지지 않도록 격리.

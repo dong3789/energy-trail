@@ -254,6 +254,16 @@ async function ensureNet(): Promise<NetClient | null> {
     return null;
   }
   net = client;
+  // 2026-08-25: 연결 끊김 시 유저에게 알리고 멀티플레이 세션은 로비로 복귀.
+  // 솔로 플레이 중이면 게임을 유지하고 끊긴 연결만 정리 (다음 ensureNet에서 재연결).
+  client.onDisconnect = () => {
+    showNetToast('연결이 끊어졌어요');
+    if (matchEntry === 'room') {
+      leaveToLobby();
+    } else {
+      net = null;
+    }
+  };
   return client;
 }
 
@@ -386,6 +396,16 @@ function leaveToLobby(): void {
   net = null;
   roomJoined = matchEntry !== 'room';
   setScreen('lobby');
+}
+
+function showNetToast(msg: string): void {
+  const toast = document.createElement('div');
+  toast.className = 'net-toast';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.remove();
+  }, 4000);
 }
 
 function restartMatch(): void {
@@ -1412,7 +1432,7 @@ function renderGame(): void {
     <div class="game-debug-row muted">${
       profile.role === 'tagger'
         ? 'Space/B 부스터 · F 홀딩: 조준 → 떼면 그물 · 클릭: 즉시 그물 · V: 카메라 모드'
-        : 'E 흡수 · F 얼림 · V: 카메라 모드'
+        : 'F 얼림 · V: 카메라 모드 · (자국: 가까이 가면 자동 흡수)'
     }</div>
     <div class="game-debug-row muted game-debug-mode">카메라: ${
       camState.mode === 'chase' ? '추적' : '자유'
@@ -1472,6 +1492,11 @@ function renderGame(): void {
   const roundTimerEl = statusHud.querySelector<HTMLElement>('#round-timer');
   const roundScoreEl = statusHud.querySelector<HTMLElement>('#round-score');
   const debugStatus = statusHud.querySelector<HTMLElement>('#status-debug');
+  // 2026-08-25: HUD 갱신 스로틀 — 값이 바뀐 프레임에만 DOM 기록 (매 프레임 textContent/classList 재계산 방지)
+  let lastTimerText = '';
+  let lastTimerState = '';
+  let lastTrailCount = -1;
+  let lastDebugStatus = '';
 
   // 2026-08-15 v4: 일시정지 메뉴 (best practice: 사용자 자유/통제)
   // - ESC 키 또는 ⚙ 버튼으로 진입
@@ -1503,7 +1528,7 @@ function renderGame(): void {
             ${
               profile.role === 'tagger'
                 ? 'Space/B 부스터 · F 그물 · Shift 대시 · V 카메라'
-                : 'E 흡수 · F 얼림 · Shift 대시 · V 카메라'
+                : 'F 얼림 · Shift 대시 · V 카메라 · (자국: 가까이 가면 자동 흡수)'
             }
           </span>
         </label>
@@ -1562,6 +1587,17 @@ function renderGame(): void {
   };
   addTrackedListener(canvasHost, 'keydown', escHandler);
 
+  // 2026-08-25: 탭 전환/백그라운드 시 자동 일시정지
+  // - 복귀 직후 남은 시간이 배경 구간만큼 증발하거나 카운트다운이 건너뛰는 왜곡 방지
+  // - RAF가 멈춘 동안은 루프 내 paused 감지가 동작하지 않으므로 숨김 시점에 countdownPausedAt을 직접 고정
+  // - roundState/countdownPausedAt은 아래쪽에서 선언되지만 콜백은 이벤트 시점에 실행되므로 안전
+  addTrackedListener(document, 'visibilitychange', () => {
+    if (!document.hidden) return;
+    if (roundState !== 'playing' && roundState !== 'countdown') return;
+    if (countdownPausedAt === null) countdownPausedAt = performance.now();
+    showPauseMenu();
+  });
+
   // Backquote (`) 키 = 디버그 HUD 토글
   const debugToggleHandler = (e: KeyboardEvent): void => {
     if (e.code !== 'Backquote') return;
@@ -1569,10 +1605,11 @@ function renderGame(): void {
   };
   addTrackedListener(canvasHost, 'keydown', debugToggleHandler);
 
-  // 2026-08-15 v4: 액션 프롬프트 (화면 중앙 하단) — 맥락별 안내
-  // - 자국 위: E 흡수 + 진행률
+  // 2026-08-15 v4 → 2026-08-25: 액션 프롬프트 (화면 중앙 하단) — 맥락별 안내
+  // - 자국 흡수는 자동 (프롬프트 불필요, absorb HUD 가 진행률 표시)
   // - 얼림 사거리 내: F 얼림 (도망자)
   // - 그물 사거리 내: F 그물 (술래)
+  // - 부스터 준비: Space (술래)
   // - 첫 3초만 표시 (이후 숨김 — best practice: progressive disclosure)
   const actionPrompt = document.createElement('div');
   actionPrompt.className = 'action-prompt';
@@ -1710,15 +1747,13 @@ function renderGame(): void {
     minimapCtx.strokeStyle = 'rgba(0, 229, 255, 0.4)';
     minimapCtx.lineWidth = 1.5;
     minimapCtx.strokeRect(2, 2, w - 4, h - 4);
-    // 좌표 변환 (월드 → 미니맵, Y는 위가 +)
-    const wx2mx = (wx: number) => w / 2 + wx * minimapScale;
-    const wz2my = (wz: number) => h / 2 + wz * minimapScale;
+    // 좌표 변환 (월드 → 미니맵, Y는 위가 +) — 호출마다 클로저 생성 대신 인라인 계산
     // 장애물 (회색 박스)
     minimapCtx.fillStyle = 'rgba(120, 100, 140, 0.6)';
     for (const o of mapRefs.obstaclesData) {
       minimapCtx.fillRect(
-        wx2mx(o.x - o.width / 2),
-        wz2my(o.z - o.depth / 2),
+        w / 2 + (o.x - o.width / 2) * minimapScale,
+        h / 2 + (o.z - o.depth / 2) * minimapScale,
         o.width * minimapScale,
         o.depth * minimapScale,
       );
@@ -1726,13 +1761,25 @@ function renderGame(): void {
     // 출구 (노란 원)
     minimapCtx.fillStyle = '#ffd97a';
     minimapCtx.beginPath();
-    minimapCtx.arc(wx2mx(exitPos.x), wz2my(exitPos.z), 4, 0, Math.PI * 2);
+    minimapCtx.arc(
+      w / 2 + exitPos.x * minimapScale,
+      h / 2 + exitPos.z * minimapScale,
+      4,
+      0,
+      Math.PI * 2,
+    );
     minimapCtx.fill();
     for (const bot of bots) {
       if (bot.out) continue;
       minimapCtx.fillStyle = bot.role === 'tagger' ? '#ff3a5c' : '#00e5ff';
       minimapCtx.beginPath();
-      minimapCtx.arc(wx2mx(bot.mesh.position.x), wz2my(bot.mesh.position.z), 3.5, 0, Math.PI * 2);
+      minimapCtx.arc(
+        w / 2 + bot.mesh.position.x * minimapScale,
+        h / 2 + bot.mesh.position.z * minimapScale,
+        3.5,
+        0,
+        Math.PI * 2,
+      );
       minimapCtx.fill();
     }
     // 자기 (큰 점 + 외곽선, 색은 자기/상대 역할에 따라)
@@ -1741,7 +1788,13 @@ function renderGame(): void {
     minimapCtx.strokeStyle = '#fff';
     minimapCtx.lineWidth = 2;
     minimapCtx.beginPath();
-    minimapCtx.arc(wx2mx(selfMesh.position.x), wz2my(selfMesh.position.z), 4.5, 0, Math.PI * 2);
+    minimapCtx.arc(
+      w / 2 + selfMesh.position.x * minimapScale,
+      h / 2 + selfMesh.position.z * minimapScale,
+      4.5,
+      0,
+      Math.PI * 2,
+    );
     minimapCtx.fill();
     minimapCtx.stroke();
   }
@@ -2237,6 +2290,8 @@ function renderGame(): void {
     obstacles: mapObstacles,
     halfWidth: mapHalfW,
     halfDepth: mapHalfD,
+    // 2026-08-25: 캐릭터 스폰 지점 위에는 아이템이 생기지 않도록 배제
+    avoid: [spawnLayout.player, ...spawnLayout.bots].map((p) => ({ x: p.x, z: p.z, r: 1.5 })),
   });
   game.disposers.push(() => itemField.dispose());
   let jellyLeft = 0;
@@ -2430,34 +2485,8 @@ function renderGame(): void {
     }
   };
 
-  // 2026-08-15: E 키로 자국 흡수 (도망자만) — 자국 위에 있을 때 1초 유지
-  // 흡수 시작은 키다운, 진행 중에는 cancel 감지만
-  const absorbKeyHandler = (e: KeyboardEvent): void => {
-    if (e.code !== 'KeyE') return;
-    if (isTagger) return; // 술래는 흡수 사용 불가
-    if (game.out) return;
-    if (e.type === 'keydown') {
-      // 자국 위에 있는지 확인
-      const query = trails.queryNearest(selfMesh.position, 1.5);
-      if (query.hit) {
-        absorb.setLastTrailPosition(query.position!.x, query.position!.z);
-        absorb.setStrengthConsumed(query.strength);
-        if (absorb.tryStart()) {
-          player.setAbsorbing(true);
-          sound.playAbsorbStart();
-        }
-      }
-    } else if (e.type === 'keyup') {
-      // 키 떼면 즉시 취소 (단, 이미 완료된 경우는 무시)
-      if (absorb.isAbsorbing()) {
-        absorb.reset();
-        player.setAbsorbing(false);
-        sound.playAbsorbCancel();
-      }
-    }
-  };
-  addTrackedListener(canvasHost, 'keydown', absorbKeyHandler);
-  addTrackedListener(canvasHost, 'keyup', absorbKeyHandler);
+  // 2026-08-25: 자동 흡수 — E 키/탭 불필요. 자국 반경 내 진입 시 AbsorbSystem.update() 가
+  //              내부에서 자동으로 tryStart() 함. 진행 중 자국에서 빠지면 기존 cancel 로직.
   function distVecToTagger(): number {
     const dx = selfMesh.position.x - taggerMesh.position.x;
     const dz = selfMesh.position.z - taggerMesh.position.z;
@@ -2660,39 +2689,19 @@ function renderGame(): void {
   let absorbLabel: HTMLElement | null = null;
   if (!isTagger) {
     const absorbWrap = document.createElement('div');
-    absorbWrap.className = 'absorb-hud';
+    absorbWrap.className = 'absorb-hud absorb-hud-auto';
     absorbWrap.innerHTML = `
       <div class="absorb-bar"><div class="absorb-bar-fill" id="absorb-bar-fill"></div></div>
-      <div class="absorb-label" id="absorb-label">${mobileMode ? '흡수' : '자국 흡수 (E)'}</div>
+      <div class="absorb-label" id="absorb-label">자국 흡수 (자동)</div>
     `;
     wrap.appendChild(absorbWrap);
     absorbHud = absorbWrap;
     absorbProgress = absorbWrap.querySelector<HTMLElement>('#absorb-bar-fill');
     absorbLabel = absorbWrap.querySelector<HTMLElement>('#absorb-label');
+    // 2026-08-25: 흡수 자동 시작 — 터치 리스너 제거. 진행률 링은 시각 피드백용으로 유지.
     if (mobileMode) {
-      absorbWrap.style.pointerEvents = 'auto';
-      const startAbsorbTouch = (e: Event): void => {
-        e.preventDefault();
-        e.stopPropagation();
-        const query = trails.queryNearest(selfMesh.position, 1.5);
-        if (!query.hit) return;
-        absorb.setLastTrailPosition(query.position!.x, query.position!.z);
-        absorb.setStrengthConsumed(query.strength);
-        if (absorb.tryStart()) {
-          player.setAbsorbing(true);
-          sound.playAbsorbStart();
-        }
-      };
-      const stopAbsorbTouch = (): void => {
-        if (absorb.isAbsorbing()) {
-          absorb.reset();
-          player.setAbsorbing(false);
-          sound.playAbsorbCancel();
-        }
-      };
-      addTrackedListener(absorbWrap, 'pointerdown', startAbsorbTouch);
-      addTrackedListener(absorbWrap, 'pointerup', stopAbsorbTouch);
-      addTrackedListener(absorbWrap, 'pointercancel', stopAbsorbTouch);
+      // 데코 — pointer-events 없음 (탭으로 발동 안 됨, 자동 시작)
+      absorbWrap.style.pointerEvents = 'none';
     }
   }
   // v6: 모바일 가상 조이스틱 (터치 환경 / 좁은 너비에서 자동 표시)
@@ -2782,6 +2791,19 @@ function renderGame(): void {
   const cameraDesired = new THREE.Vector3();
   const cameraLookAt = new THREE.Vector3();
   const cameraFacing = new THREE.Vector3();
+  // 2026-08-25: 프레임당 clone/new 제거용 재사용 버퍼 — 매 프레임 할당이 모바일에서 GC 스파이크 유발
+  const camRayVec = new THREE.Vector3();
+  const camRayOriginVec = new THREE.Vector3();
+  const lookRayVec = new THREE.Vector3();
+  const blockersScratch: THREE.Object3D[] = [];
+  const camRaycaster = new THREE.Raycaster();
+  const lookRaycaster = new THREE.Raycaster();
+  const preyPointsScratch: Array<{
+    x: number;
+    z: number;
+    mesh: THREE.Object3D;
+    isPlayer: boolean;
+  }> = [];
   // 2026-08-15: 카메라 yaw 회전용 임시 객체 (할당 재사용)
   const yawQuatTmp = new THREE.Quaternion();
   const yawAxis = new THREE.Vector3(0, 1, 0);
@@ -2959,7 +2981,7 @@ function renderGame(): void {
         if (elapsed < 4.5) {
           const tipText = isTagger
             ? 'WASD 이동 · F 그물 · Space 부스터 · Shift 대시'
-            : 'WASD 이동 · E 자국 흡수 · F 술래 동결 · Shift 대시';
+            : 'WASD 이동 · F 술래 동결 · Shift 대시 · (자국: 가까이 가면 자동 흡수)';
           showActionPrompt(tipText, '🎮', '#2a1a4a');
         }
       }
@@ -2972,15 +2994,11 @@ function renderGame(): void {
         }
       }
 
-      // 2026-08-15 v4: 액션 프롬프트 — 맥락별 안내 (3초 표시)
-      // - 도망자: 자국 위 / 얼림 사거리 내
+      // 2026-08-15 v4 → 2026-08-25: 액션 프롬프트 — 자국 흡수는 자동이므로 제거
+      // - 도망자: 얼림 사거리 내 (F) — 자국 흡수는 자동
       // - 술래: 그물 사거리 내 / 부스터 준비
       if (!isTagger) {
-        // 자국 위 (E 흡수)
-        const q = trails.queryNearest(selfMesh.position, 1.5);
-        if (q.hit && !absorb.isAbsorbing() && absorb.getCooldown() <= 0) {
-          showActionPrompt('자국 흡수', 'E', '#54f0b1');
-        } else if (ice.isReady() && taggerMesh !== selfMesh) {
+        if (ice.isReady() && taggerMesh !== selfMesh) {
           const dist = distVecToTagger();
           if (dist <= GAME.iceRange) {
             showActionPrompt('술래 동결', 'F', '#66e0ff');
@@ -3018,11 +3036,16 @@ function renderGame(): void {
     }
 
     if (!game.out) {
-      // 2026-08-15: 흡수 시스템 업데이트 (E 키 1초 유지)
-      // 흡수 중 매 프레임: 자국 위에 있는지 확인 + progress 갱신
+      // 2026-08-25: 자동 흡수 — 자국 반경 내 진입 시 자동으로 흡수 시작 (E 키/탭 불필요)
+      // - 흡수 중 매 프레임: 자국 위에 있는지 확인 + progress 갱신
+      // - 흡수 중 아닐 때 inTrail 이면 AbsorbSystem.update() 가 내부에서 tryStart() 호출
       if (absorb && !isTagger) {
-        const inTrail = trails.queryNearest(selfMesh.position, 1.5).hit;
-        const absorbEvent = absorb.update(dt, inTrail, ice.isActive() || player.isFrozen());
+        const query = trails.queryNearest(selfMesh.position, GAME.absorbRadius);
+        if (query.hit && query.position) {
+          absorb.setLastTrailPosition(query.position.x, query.position.z);
+          absorb.setStrengthConsumed(query.strength);
+        }
+        const absorbEvent = absorb.update(dt, query.hit, ice.isActive() || player.isFrozen());
         if (absorbEvent === 'cancel') {
           player.setAbsorbing(false);
           sound.playAbsorbCancel();
@@ -3099,10 +3122,9 @@ function renderGame(): void {
       player.setExtraSpeedMul(
         playerSlow ? GAME.itemStickySlowMul : jellyLeft > 0 ? GAME.itemJellySpeedMul : 1,
       );
-      const preyPoints: Array<{ x: number; z: number; mesh: THREE.Object3D; isPlayer: boolean }> =
-        [];
+      preyPointsScratch.length = 0;
       if (!isTagger && !game.out) {
-        preyPoints.push({
+        preyPointsScratch.push({
           x: selfMesh.position.x,
           z: selfMesh.position.z,
           mesh: selfMesh,
@@ -3111,7 +3133,7 @@ function renderGame(): void {
       }
       for (const bot of bots) {
         if (bot.out || bot.role !== 'runner') continue;
-        preyPoints.push({
+        preyPointsScratch.push({
           x: bot.mesh.position.x,
           z: bot.mesh.position.z,
           mesh: bot.mesh,
@@ -3124,11 +3146,13 @@ function renderGame(): void {
       }
       if (taggerAI && smokeLeft <= 0) {
         const locked = chasePrey;
-        const currentPrey = locked ? preyPoints.find((p) => p.mesh === locked.mesh) : undefined;
+        const currentPrey = locked
+          ? preyPointsScratch.find((p) => p.mesh === locked.mesh)
+          : undefined;
         const sticky = pickStickyPoint(
           taggerMesh.position.x,
           taggerMesh.position.z,
-          preyPoints,
+          preyPointsScratch,
           currentPrey,
           GAME.taggerChaseSwitchMargin,
         );
@@ -3170,7 +3194,7 @@ function renderGame(): void {
         const hits = contactsInRange(
           taggerMesh.position.x,
           taggerMesh.position.z,
-          preyPoints,
+          preyPointsScratch,
           GAME.taggerContactDistance,
         );
         const playerHit = hits.find((p) => p.isPlayer);
@@ -3342,7 +3366,11 @@ function renderGame(): void {
 
     // 자국 개수 HUD
     if (game.statusTimer) {
-      game.statusTimer.textContent = String(trails.getActiveCount());
+      const trailCount = trails.getActiveCount();
+      if (trailCount !== lastTrailCount) {
+        lastTrailCount = trailCount;
+        game.statusTimer.textContent = String(trailCount);
+      }
     }
 
     // 2026-08-15 v4: 라운드 타이머 HUD — 큰 글씨 + 색상 그라데이션 (best practice: 시각적 계층)
@@ -3352,15 +3380,15 @@ function renderGame(): void {
         .toString()
         .padStart(2, '0');
       const timeStr = `${mm}:${ss}`;
-      roundTimerEl.textContent = timeStr;
       // 색상: green (safe) → yellow (warning) → red (critical) → flashing
-      roundTimerEl.classList.remove('warn', 'critical', 'flash');
-      if (roundTime < 10) {
-        roundTimerEl.classList.add('flash');
-      } else if (roundTime < 30) {
-        roundTimerEl.classList.add('critical');
-      } else if (roundTime < 60) {
-        roundTimerEl.classList.add('warn');
+      const state =
+        roundTime < 10 ? 'flash' : roundTime < 30 ? 'critical' : roundTime < 60 ? 'warn' : '';
+      if (timeStr !== lastTimerText || state !== lastTimerState) {
+        lastTimerText = timeStr;
+        lastTimerState = state;
+        roundTimerEl.textContent = timeStr;
+        roundTimerEl.classList.remove('warn', 'critical', 'flash');
+        if (state) roundTimerEl.classList.add(state);
       }
     }
     // v4: speedStatus는 dpad 아래 작은 게이지로 변경 (기존 코드와 호환 위해 유지)
@@ -3463,7 +3491,7 @@ function renderGame(): void {
       }
       shotChargeReady = canFire;
     }
-    if (debugStatus) {
+    if (debugStatus && debug.style.display !== 'none') {
       // v5 디버그: 자기 위치 + 입력 상태 (캔버스에 키가 들어오는지 즉시 확인)
       const inp = player.getDebugInput();
       const px = selfMesh.position.x;
@@ -3472,7 +3500,11 @@ function renderGame(): void {
         (inp.forward > 0 ? '↑' : inp.forward < 0 ? '↓' : '·') +
         (inp.right > 0 ? '→' : inp.right < 0 ? '←' : '·');
       const frozenTag = player.isFrozen() ? ' [얼림]' : '';
-      debugStatus.textContent = `(${px.toFixed(1)}, ${pz.toFixed(1)}) 입력 ${dirArrow}${frozenTag}`;
+      const debugText = `(${px.toFixed(1)}, ${pz.toFixed(1)}) 입력 ${dirArrow}${frozenTag}`;
+      if (debugText !== lastDebugStatus) {
+        lastDebugStatus = debugText;
+        debugStatus.textContent = debugText;
+      }
     }
 
     // 얼림 버튼 상태 업데이트
@@ -3524,11 +3556,12 @@ function renderGame(): void {
           : `재사용 대기 ${absorb.getCooldown().toFixed(1)}초`;
       } else {
         absorbHud.classList.remove('active', 'boost');
-        const query = trails.queryNearest(selfMesh.position, 1.5);
+        // 2026-08-25: 자동 흡수 — 라벨도 "자국 위에 서세요" 안내로 단순화
+        const query = trails.queryNearest(selfMesh.position, GAME.absorbRadius);
         if (query.hit) {
-          absorbLabel.textContent = mobileMode ? '흡수' : '자국 흡수 (E) — 준비';
+          absorbLabel.textContent = mobileMode ? '흡수 중' : '자국 위에 서면 자동 흡수';
         } else {
-          absorbLabel.textContent = mobileMode ? '흡수' : '자국 흡수 (E) — 자국 위에 서세요';
+          absorbLabel.textContent = mobileMode ? '대기' : '자국 위로 이동하세요';
         }
       }
     }
@@ -3582,17 +3615,19 @@ function renderGame(): void {
     // 4) 2026-08-15: 카메라-장애물 충돌 (벽/박스에 파묻히지 않게)
     // - 카메라 desired 위치에서 캐릭터로 향하는 ray
     // - 사이에 벽/박스 있으면 hit 직전까지만 카메라를 당김
-    const camRay = cameraDesired.clone().sub(selfMesh.position);
+    const camRay = camRayVec.copy(cameraDesired).sub(selfMesh.position);
     camRay.y = 0;
     const camRayDist = camRay.length();
-    const blockers: THREE.Object3D[] = [];
-    for (const w of mapRefs.walls) blockers.push(w);
-    for (const o of mapRefs.obstacles) blockers.push(o);
+    blockersScratch.length = 0;
+    for (const w of mapRefs.walls) blockersScratch.push(w);
+    for (const o of mapRefs.obstacles) blockersScratch.push(o);
     if (camRayDist > 0.01) {
       camRay.normalize();
-      const camRayOrigin = cameraDesired.clone();
-      const ray = new THREE.Raycaster(camRayOrigin, camRay, 0, camRayDist);
-      const hits = ray.intersectObjects(blockers, false);
+      const camRayOrigin = camRayOriginVec.copy(cameraDesired);
+      camRaycaster.set(camRayOrigin, camRay);
+      camRaycaster.near = 0;
+      camRaycaster.far = camRayDist;
+      const hits = camRaycaster.intersectObjects(blockersScratch, false);
       if (hits.length > 0) {
         // 2026-08-15 v2: min distance 1.0 → 0.5 — 더 강하게 캐릭터 가까이
         const safeDist = Math.max(0.5, hits[0].distance - 0.3);
@@ -3604,12 +3639,14 @@ function renderGame(): void {
     // 4.5) 2026-08-15 v2: lookAt raycast — 카메라가 보는 시야에 박스 있으면 보정
     // - 카메라 위치에서 lookAt 방향으로 ray
     // - hit 있으면 lookAt을 hit 직전(살짝 캐릭터 쪽)으로 → 캐릭터가 안 가려지도록
-    const lookRay = cameraLookAt.clone().sub(ctx.camera.position);
+    const lookRay = lookRayVec.copy(cameraLookAt).sub(ctx.camera.position);
     const lookRayDist = lookRay.length();
-    if (lookRayDist > 0.01 && blockers.length > 0) {
-      const lookDir = lookRay.clone().normalize();
-      const lookRayObj = new THREE.Raycaster(ctx.camera.position.clone(), lookDir, 0, lookRayDist);
-      const lookHits = lookRayObj.intersectObjects(blockers, false);
+    if (lookRayDist > 0.01 && blockersScratch.length > 0) {
+      const lookDir = lookRay.normalize();
+      lookRaycaster.set(ctx.camera.position, lookDir);
+      lookRaycaster.near = 0;
+      lookRaycaster.far = lookRayDist;
+      const lookHits = lookRaycaster.intersectObjects(blockersScratch, false);
       if (lookHits.length > 0) {
         // lookAt을 hit의 살짝 위쪽(박스 위 +0.5m)으로 옮김 → 카메라가 박스 너머를 안 봄
         // 가장 가까운 hit의 distance보다 살짝 짧은 곳에서 lookAt

@@ -9,8 +9,17 @@ const CATCH_DIST = 1.65;
 const MAX_PLAYERS = 5;
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 
+// 2026-08-25: 전역 예외 핸들러 — 단일 런타임 에러로 프로세스가 죽으면
+// 활성 매치의 모든 유저가 일제히 끊긴다. 에러를 기록하고 서버를 유지한다.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err);
+});
+
 /** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket }} Player */
-/** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number }} Room */
+/** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string }} Room */
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
@@ -50,7 +59,12 @@ function genCode() {
     const c = String(1000 + Math.floor(Math.random() * 9000));
     if (!rooms.has(c)) return c;
   }
-  return String(Date.now() % 9000).padStart(4, '0');
+  // 2026-08-25: 기존 fallback(Date.now() % 9000)은 진행 중인 방 코드와 겹쳐
+  // rooms.set이 그 방을 덮어써 유저들이 튕겼다. 미사용 코드를 전수 탐색해 충돌을 원천 차단.
+  for (let c = 1000; c < 10000; c++) {
+    if (!rooms.has(String(c))) return String(c);
+  }
+  return '';
 }
 
 function genId() {
@@ -133,6 +147,12 @@ function tickPlaying(room) {
   }
   const taggers = [...room.players.values()].filter((p) => p.role === 'tagger' && !p.out);
   const runners = [...room.players.values()].filter((p) => p.role === 'runner' && !p.out);
+  // 2026-08-25: 술래가 매치 중 이탈하면 라운드가 끝나지 않고 타이머 만료 뒤
+  // "나간 술래 승리"로 처리되던 문제 — 술래가 없으면 즉시 도망자 승으로 종료
+  if (taggers.length === 0) {
+    endRoom(room, 'runner', '술래가 방을 나갔습니다');
+    return;
+  }
   if (runners.length === 0 && taggers.length > 0) {
     endRoom(room, 'tagger', '도망자를 모두 잡았습니다');
     return;
@@ -150,7 +170,9 @@ function tickPlaying(room) {
     endRoom(room, 'tagger', '도망자를 모두 잡았습니다');
     return;
   }
-  broadcast(room, {
+  // 2026-08-25: 변경 감지 스킵 — 위치/점수/상태 변화가 없으면 peers 전송 생략 (대역폭·CPU 절감).
+  // left는 초 단위로 올림해 1초에 한 번만 갱신 (클라이언트는 left를 사용하지 않음).
+  const payload = JSON.stringify({
     t: 'peers',
     list: [...room.players.values()].map((p) => ({
       id: p.id,
@@ -161,8 +183,14 @@ function tickPlaying(room) {
       role: p.role,
     })),
     score: room.score,
-    left,
+    left: Math.ceil(left),
   });
+  if (payload !== room.lastPeersRaw) {
+    room.lastPeersRaw = payload;
+    for (const p of room.players.values()) {
+      if (p.ws.readyState === 1) p.ws.send(payload);
+    }
+  }
 }
 
 function leave(ws) {
@@ -178,9 +206,6 @@ function leave(ws) {
   }
   if (player.id === room.hostId) {
     room.hostId = [...room.players.keys()][0];
-  }
-  if (room.phase === 'playing' && player.role === 'runner') {
-    player.out = true;
   }
   broadcast(room, roomPayload(room));
 }
@@ -199,6 +224,10 @@ const httpServer = createServer((req, res) => {
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
   const player = {
     id: genId(),
     name: '손님',
@@ -237,6 +266,10 @@ wss.on('connection', (ws) => {
     if (t === 'create') {
       if (slot.room) return;
       const code = genCode();
+      if (!code) {
+        send(ws, { t: 'err', msg: '서버가 가득 찼어요. 잠시 후 다시 시도해 주세요.' });
+        return;
+      }
       /** @type {Room} */
       const room = {
         code,
@@ -344,6 +377,20 @@ setInterval(() => {
     if (room.phase === 'playing') tickPlaying(room);
   }
 }, TICK_MS);
+
+// 2026-08-25: heartbeat — 모바일 네트워크 전환 등으로 반쯤 죽은 연결(좀비 소켓) 정리.
+// pong 미응답 소켓은 terminate → close 핸들러가 방/플레이어 정리를 수행.
+const HEARTBEAT_MS = 30_000;
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, HEARTBEAT_MS);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`[energy-trail-ws] :${PORT} /ws`);
