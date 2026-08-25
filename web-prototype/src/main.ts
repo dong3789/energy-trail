@@ -1562,6 +1562,17 @@ function renderGame(): void {
   };
   addTrackedListener(canvasHost, 'keydown', escHandler);
 
+  // 2026-08-25: 탭 전환/백그라운드 시 자동 일시정지
+  // - 복귀 직후 남은 시간이 배경 구간만큼 증발하거나 카운트다운이 건너뛰는 왜곡 방지
+  // - RAF가 멈춘 동안은 루프 내 paused 감지가 동작하지 않으므로 숨김 시점에 countdownPausedAt을 직접 고정
+  // - roundState/countdownPausedAt은 아래쪽에서 선언되지만 콜백은 이벤트 시점에 실행되므로 안전
+  addTrackedListener(document, 'visibilitychange', () => {
+    if (!document.hidden) return;
+    if (roundState !== 'playing' && roundState !== 'countdown') return;
+    if (countdownPausedAt === null) countdownPausedAt = performance.now();
+    showPauseMenu();
+  });
+
   // Backquote (`) 키 = 디버그 HUD 토글
   const debugToggleHandler = (e: KeyboardEvent): void => {
     if (e.code !== 'Backquote') return;
