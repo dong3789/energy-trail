@@ -18,6 +18,7 @@ const REVIVE_NO_LAST_SECONDS = 10.0; // 남은 시간 ≤ 10초면 불가
 const REVIVE_RANGE = 3.5; // 살리는 쪽 → 시체까지 최대 거리
 const REVIVE_INVULNERABLE_SECONDS = 1.0; // 부활 후 무적
 const REVIVE_EDGE_MARGIN = 3.0; // 가장자리 스폰 마진
+const REVIVE_COOLDOWN_MS = 8000; // 2026-08-25: 같은 대상 재살리기 cooldown — 자국 3개 가치(≈8초)에 맞춰 서버 권위 가드
 const MAP_WIDTH = 42; // config.ts의 MAP.width 와 일치
 const MAP_DEPTH = 42;
 const TAGGER_WIN_OUT_COUNT = 2; // 동시 다운 2명이면 술래 승 (기획안)
@@ -32,7 +33,7 @@ process.on('unhandledRejection', (err) => {
 });
 
 /** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number }} Player */
-/** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string }} Room */
+/** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number> }} Room */
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
@@ -156,6 +157,7 @@ function resetRoomToLobby(room) {
   room.score = 0;
   room.startedAt = 0;
   room.roles = {};
+  room.lastReviveAt.clear(); // 2026-08-25: 다음 라운드를 위해 cooldown 리셋
   for (const p of room.players.values()) {
     p.out = false;
     p.role = '';
@@ -335,6 +337,7 @@ wss.on('connection', (ws) => {
         startedAt: 0,
         score: 0,
         createdAt: Date.now(),
+        lastReviveAt: new Map(), // 2026-08-25: targetId → 마지막 부활 시각 (ms)
       };
       rooms.set(code, room);
       slot.room = room;
@@ -442,6 +445,13 @@ wss.on('connection', (ws) => {
         send(ws, { t: 'reviveDenied', reason: 'target_too_far' });
         return;
       }
+      // 2026-08-25: 같은 대상 재살리기 cooldown — 자국 3개 가치(≈8초)에 맞춤.
+      // 서버 권위: 클라가 빠르게 연타해도 이 가드를 못 넘김.
+      const lastReviveAt = room.lastReviveAt.get(target.id);
+      if (lastReviveAt && Date.now() - lastReviveAt < REVIVE_COOLDOWN_MS) {
+        send(ws, { t: 'reviveDenied', reason: 'cooldown' });
+        return;
+      }
       // 점수 가드
       if (room.score < REVIVE_TRAIL_COST) {
         send(ws, { t: 'reviveDenied', reason: 'not_enough_trail' });
@@ -462,6 +472,9 @@ wss.on('connection', (ws) => {
       target.yaw = 0;
       target.out = false;
       target.invulnUntil = now + REVIVE_INVULNERABLE_SECONDS * 1000;
+      // 2026-08-25: 같은 대상 재살리기 cooldown 기록 — 다음 살리기 시도가
+      // REVIVE_COOLDOWN_MS 이내면 서버가 거부.
+      room.lastReviveAt.set(target.id, now);
       broadcast(room, { t: 'score', n: room.score });
       broadcast(room, {
         t: 'revived',
