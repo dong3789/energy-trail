@@ -3479,7 +3479,9 @@ function renderGame(): void {
       // 2026-08-25: 자동 흡수 — 자국 반경 내 진입 시 자동으로 흡수 시작 (E 키/탭 불필요)
       // - 흡수 중 매 프레임: 자국 위에 있는지 확인 + progress 갱신
       // - 흡수 중 아닐 때 inTrail 이면 AbsorbSystem.update() 가 내부에서 tryStart() 호출
-      if (absorb && !isTagger) {
+      // - OUT된 도망자는 흡수 차단 — 자국에 닿아도 score가 오르면 다른 동료가
+      //   잡힌 동안 혼자 승리 가능. 살리기 broadcast 도착 전까지 out 유지.
+      if (absorb && !isTagger && !game.out) {
         const query = trails.queryNearest(selfMesh.position, GAME.absorbRadius);
         if (query.hit && query.position) {
           absorb.setLastTrailPosition(query.position.x, query.position.z);
