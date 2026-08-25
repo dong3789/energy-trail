@@ -10,7 +10,7 @@ const MAX_PLAYERS = 5;
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 
 /** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket }} Player */
-/** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number }} Room */
+/** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string }} Room */
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
@@ -156,7 +156,9 @@ function tickPlaying(room) {
     endRoom(room, 'tagger', '도망자를 모두 잡았습니다');
     return;
   }
-  broadcast(room, {
+  // 2026-08-25: 변경 감지 스킵 — 위치/점수/상태 변화가 없으면 peers 전송 생략 (대역폭·CPU 절감).
+  // left는 초 단위로 올림해 1초에 한 번만 갱신 (클라이언트는 left를 사용하지 않음).
+  const payload = JSON.stringify({
     t: 'peers',
     list: [...room.players.values()].map((p) => ({
       id: p.id,
@@ -167,8 +169,14 @@ function tickPlaying(room) {
       role: p.role,
     })),
     score: room.score,
-    left,
+    left: Math.ceil(left),
   });
+  if (payload !== room.lastPeersRaw) {
+    room.lastPeersRaw = payload;
+    for (const p of room.players.values()) {
+      if (p.ws.readyState === 1) p.ws.send(payload);
+    }
+  }
 }
 
 function leave(ws) {
