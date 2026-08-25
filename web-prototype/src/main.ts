@@ -66,6 +66,8 @@ interface Profile {
   role: Role;
   roleWish: RoleWish;
   mapId: MapId;
+  /** 2026-08-25: 마지막 참가 방 코드 — 자동 재연결용. 빈 문자열이면 재연결 안 함. */
+  lastRoomCode: string;
 }
 
 interface GameState {
@@ -238,12 +240,24 @@ const profile: Profile = {
   role: 'runner',
   roleWish: 'random',
   mapId: 'park',
+  // 2026-08-25: 마지막으로 참가한 방 코드 — 자동 재연결 시 재join에 사용.
+  // 멀티플레이 도중 끊겨도 사용자가 코드 다시 입력하지 않도록 보존.
+  lastRoomCode: '',
 };
 let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
 let roomJoined = true;
 let matchEntry: MatchEntryMode = 'solo';
 let net: NetClient | null = null;
+// 2026-08-25: 자동 재연결 상태 — 끊김 시 카운트다운 UI가 활성인지.
+// 활성 중 사용자가 cancel 누르면 즉시 로비로 보냄.
+let reconnectUi: {
+  overlay: HTMLDivElement;
+  countdown: number;
+  attempts: number;
+  timer: number;
+  cancelled: boolean;
+} | null = null;
 
 async function ensureNet(): Promise<NetClient | null> {
   if (net?.connected) return net;
@@ -254,17 +268,215 @@ async function ensureNet(): Promise<NetClient | null> {
     return null;
   }
   net = client;
-  // 2026-08-25: 연결 끊김 시 유저에게 알리고 멀티플레이 세션은 로비로 복귀.
-  // 솔로 플레이 중이면 게임을 유지하고 끊긴 연결만 정리 (다음 ensureNet에서 재연결).
+  // 2026-08-25: 연결 끊김 시 —
+  // 멀티플레이: 5초 카운트다운 후 같은 방 코드로 자동 재연결 시도 (최대 5회, exponential).
+  //           사용자가 cancel 누르면 즉시 로비. 마지막 시도도 실패 시 명시적 로비.
+  // 솔로: 게임을 유지하고 다음 ensureNet 호출에서 재연결 (기존 동작).
   client.onDisconnect = () => {
     showNetToast('연결이 끊어졌어요');
     if (matchEntry === 'room') {
-      leaveToLobby();
+      if (profile.lastRoomCode) {
+        void tryAutoReconnect(profile.lastRoomCode);
+      } else {
+        leaveToLobby();
+      }
     } else {
       net = null;
     }
   };
   return client;
+}
+
+// 2026-08-25: 멀티플레이 자동 재연결 — 끊긴 후 같은 code로 재join 시도.
+// - 서버는 phase='lobby'일 때만 join 허용. 'playing'/'ended'면 서버가 err 응답.
+// - 5회까지 exponential backoff (1s, 2s, 4s, 8s, 16s) 시도.
+// - 시도 사이 카운트다운 UI 표시 (사용자 cancel 우선).
+// - 5회 실패 후 명시적 로비 복귀 + 알림.
+// - 재연결 성공 시 새 player id로 같은 룸의 lobby에 합류 (다음 라운드 대기 또는 다음 시작).
+async function tryAutoReconnect(code: string): Promise<void> {
+  // 기존 UI가 있으면 정리 (중복 호출 방지)
+  if (reconnectUi) return;
+  const MAX_ATTEMPTS = 5;
+  // 백오프: 1, 2, 4, 8, 16초
+  const backoff = (n: number): number => 1000 * Math.pow(2, n);
+  const overlay = document.createElement('div');
+  overlay.className = 'reconnect-overlay';
+  const eyebrow = document.createElement('div');
+  eyebrow.className = 'reconnect-eyebrow';
+  eyebrow.textContent = '재연결 중';
+  const msg = document.createElement('div');
+  msg.className = 'reconnect-msg';
+  const countdown = document.createElement('div');
+  countdown.className = 'reconnect-countdown';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'button secondary';
+  cancelBtn.textContent = '취소하고 로비로';
+  overlay.append(eyebrow, msg, countdown, cancelBtn);
+  document.body.appendChild(overlay);
+
+  let attempts = 0;
+  let cancelled = false;
+  let currentTimer = 0;
+  const ui = {
+    overlay,
+    countdown: 0,
+    attempts: 0,
+    timer: 0,
+    cancelled: false,
+  };
+  reconnectUi = ui;
+
+  const cleanup = (): void => {
+    if (currentTimer) {
+      window.clearTimeout(currentTimer);
+      currentTimer = 0;
+    }
+    overlay.remove();
+    if (reconnectUi === ui) reconnectUi = null;
+  };
+
+  cancelBtn.addEventListener('click', () => {
+    cancelled = true;
+    ui.cancelled = true;
+    cleanup();
+    leaveToLobby();
+  });
+
+  const tryOnce = async (): Promise<'ok' | 'in_progress' | 'failed' | 'cancelled'> => {
+    if (cancelled) return 'cancelled';
+    // 기존 net 참조 정리 (이미 끊긴 상태)
+    if (net) {
+      try {
+        net.close();
+      } catch {
+        /* ignore */
+      }
+      net = null;
+    }
+    const client = new NetClient();
+    const ok = await client.connect(wsUrlFromLocation(window.location));
+    if (!ok) return 'failed';
+    // 재연결 시 onDisconnect 또 발화하는 것 방지: 일단 다음 시도에서 덮어씀
+    client.onDisconnect = () => {
+      /* reconnect 흐름이 관리 */
+    };
+    // hello + join 결과 대기
+    const result = await new Promise<'lobby' | 'playing' | 'failed' | 'cancelled'>((resolve) => {
+      let resolved = false;
+      const finish = (r: 'lobby' | 'playing' | 'failed' | 'cancelled'): void => {
+        if (resolved) return;
+        resolved = true;
+        resolve(r);
+      };
+      client.onRoom = (c) => {
+        // join 응답 — phase가 lobby면 성공. playing/ended면 시도 불가.
+        if (c.phase === 'lobby') {
+          finish('lobby');
+        } else {
+          finish('playing');
+        }
+      };
+      client.onError = () => finish('failed');
+      // 안전 타임아웃 — 서버가 응답 안 할 때
+      window.setTimeout(() => finish('failed'), 4000);
+      try {
+        client.hello({
+          name: profile.nickname,
+          char: profile.characterId,
+          wish: profile.roleWish,
+          map: profile.mapId,
+        });
+        client.join(code);
+      } catch {
+        finish('failed');
+      }
+    });
+    if (result === 'cancelled') {
+      try {
+        client.close();
+      } catch {
+        /* ignore */
+      }
+      return 'cancelled';
+    }
+    if (result === 'failed') {
+      try {
+        client.close();
+      } catch {
+        /* ignore */
+      }
+      return 'failed';
+    }
+    if (result === 'playing') {
+      // 진행 중 — ws 닫고 다음 시도에서 백오프 후 재시도
+      try {
+        client.close();
+      } catch {
+        /* ignore */
+      }
+      return 'in_progress';
+    }
+    // lobby — 성공: 새 client를 net에 할당 + onDisconnect 재설정 + room screen
+    net = client;
+    roomCode = client.code;
+    profile.lastRoomCode = client.code;
+    roomJoined = true;
+    profile.mapId = client.map as MapId;
+    client.onDisconnect = () => {
+      showNetToast('연결이 끊어졌어요');
+      if (matchEntry === 'room' && profile.lastRoomCode) {
+        void tryAutoReconnect(profile.lastRoomCode);
+      } else {
+        leaveToLobby();
+      }
+    };
+    setScreen('room');
+    return 'ok';
+  };
+
+  const attempt = async (): Promise<void> => {
+    if (cancelled) return;
+    attempts += 1;
+    ui.attempts = attempts;
+    msg.textContent = `방 ${code} 재연결 시도 (${attempts}/${MAX_ATTEMPTS})`;
+    const res = await tryOnce();
+    if (cancelled) return;
+    if (res === 'ok') {
+      cleanup();
+      return;
+    }
+    if (res === 'failed' || res === 'in_progress') {
+      if (attempts >= MAX_ATTEMPTS) {
+        msg.textContent = `재연결 실패 (${MAX_ATTEMPTS}회). 로비로 돌아갑니다.`;
+        cancelBtn.textContent = '로비로';
+        window.setTimeout(() => {
+          cleanup();
+          leaveToLobby();
+        }, 1500);
+        return;
+      }
+      // 다음 시도까지 백오프 + 카운트다운 표시
+      const waitMs = backoff(attempts - 1);
+      let remaining = Math.ceil(waitMs / 1000);
+      countdown.textContent = `${remaining}초 후 재시도`;
+      currentTimer = window.setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          if (currentTimer) {
+            window.clearInterval(currentTimer);
+            currentTimer = 0;
+          }
+          void attempt();
+        } else {
+          countdown.textContent = `${remaining}초 후 재시도`;
+        }
+      }, 1000);
+    }
+  };
+
+  // 첫 시도는 즉시 (사용자가 끊김 후 빠르게 복구되길 원함)
+  await attempt();
 }
 
 function netHello(): void {
@@ -927,6 +1139,7 @@ function renderRoom(): void {
       };
       client.onRoom = () => {
         roomCode = client.code;
+        profile.lastRoomCode = client.code; // 2026-08-25: 재연결용 보존
         roomJoined = true;
         profile.mapId = client.map as MapId;
         setScreen('room');
@@ -991,6 +1204,7 @@ function renderRoom(): void {
       netHello();
       client.onRoom = () => {
         roomCode = client.code;
+        profile.lastRoomCode = client.code; // 2026-08-25: 재연결용 보존
         paintDigits(client.code);
         paintSeats();
         if (startBtn) {
