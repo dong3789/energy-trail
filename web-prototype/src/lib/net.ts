@@ -176,6 +176,17 @@ export class NetClient {
     } catch {
       return;
     }
+    // 2026-08-25: 메시지 처리 throw 격리 — 한 메시지의 버그가 ws 큐의
+    // 나머지 메시지 처리를 막거나 onDisconnect 같은 상태 변경을 누락시키지 않도록.
+    // onCaught/onRevived 같은 콜백 throw도 포함.
+    try {
+      this.processMessage(msg);
+    } catch (err) {
+      console.error('[net.handle] processMessage threw:', err, msg);
+    }
+  }
+
+  private processMessage(msg: Record<string, unknown>): void {
     const t = msg.t;
     if (t === 'welcome' && typeof msg.id === 'string') this.id = msg.id;
     if (t === 'err' && typeof msg.msg === 'string') {
