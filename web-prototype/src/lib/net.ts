@@ -144,7 +144,8 @@ export class NetClient {
   }
 
   sendScore(): void {
-    this.send({ t: 'score' });
+    // 2026-08-25: 서버가 n(유한한 숫자)을 필수 검증 — NaN 주입 차단. 미전송 시 점수가 무시된다.
+    this.send({ t: 'score', n: 1 });
   }
 
   sendCatch(id: string): void {
