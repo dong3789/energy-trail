@@ -2341,6 +2341,14 @@ function renderGame(): void {
       (child.material as THREE.Material).dispose();
     });
   });
+  // 2026-08-25: 연막 전면 안개 오버레이 — 사용 화면을 거의 불투명하게 뒤덮음.
+  // pointer-events: none 으로 실맹 중에도 터치/키 조작은 그대로 통과.
+  const smokeFog = document.createElement('div');
+  smokeFog.className = 'smoke-fog';
+  canvasHost.appendChild(smokeFog);
+  game.disposers.push(() => {
+    smokeFog.remove();
+  });
   const setSelfHidden = (hidden: boolean): void => {
     selfMesh.traverse((child) => {
       if (child instanceof THREE.Sprite) {
@@ -2367,6 +2375,7 @@ function renderGame(): void {
     else if (kind === 'smoke') {
       smokeLeft = GAME.itemSmokeDuration;
       smokeCloud.visible = true;
+      smokeFog.classList.add('on');
       setSelfHidden(true);
       chasePrey = undefined;
       for (const bot of bots) bot.taggerAI?.breakChase(selfMesh.position);
@@ -2970,6 +2979,8 @@ function renderGame(): void {
     }
     // 2026-08-15: 라운드 종료 후 — 입력/물리 정지
     if (roundState === 'ended') {
+      // 연막 지속 중 라운드가 끝나면 안개가 결과 화면에 남지 않도록 정리
+      smokeFog.classList.remove('on');
       return;
     }
 
@@ -3108,6 +3119,7 @@ function renderGame(): void {
         }
         if (smokeLeft <= 0) {
           smokeCloud.visible = false;
+          smokeFog.classList.remove('on');
           setSelfHidden(false);
           chasePrey = undefined;
           for (const bot of bots) {
