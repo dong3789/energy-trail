@@ -33,20 +33,57 @@ export function pointHitsObstacle(
   return false;
 }
 
+export interface SpawnAvoid {
+  x: number;
+  z: number;
+  r: number;
+}
+
+function hitsAvoid(x: number, z: number, avoid: readonly SpawnAvoid[]): boolean {
+  for (const a of avoid) {
+    const dx = x - a.x;
+    const dz = z - a.z;
+    if (dx * dx + dz * dz < a.r * a.r) return true;
+  }
+  return false;
+}
+
+function rectDistance(x: number, z: number, o: ObstacleSpec): number {
+  const dx = Math.max(Math.abs(x - o.x) - o.width / 2, 0);
+  const dz = Math.max(Math.abs(z - o.z) - o.depth / 2, 0);
+  return Math.hypot(dx, dz);
+}
+
 export function pickClearPoint(
   obstacles: readonly ObstacleSpec[],
   halfWidth: number,
   halfDepth: number,
   rng: () => number,
   margin = 2,
-): { x: number; z: number } | null {
+  avoid: readonly SpawnAvoid[] = [],
+): { x: number; z: number } {
   const pad = 4;
+  let best: { x: number; z: number } | null = null;
+  let bestClearance = -Infinity;
   for (let i = 0; i < 24; i++) {
     const x = (rng() * 2 - 1) * (halfWidth - pad);
     const z = (rng() * 2 - 1) * (halfDepth - pad);
-    if (!pointHitsObstacle(x, z, obstacles, margin)) return { x, z };
+    if (!pointHitsObstacle(x, z, obstacles, margin) && !hitsAvoid(x, z, avoid)) {
+      return { x, z };
+    }
+    // 실패한 후보 중 가장 여유로운 지점을 기록 — 2026-08-25:
+    // 24회 전부 실패 시 null을 반환해 아이템이 아예 스폰되지 않던 문제 방지 (밀집 맵)
+    let clearance = Infinity;
+    for (const o of obstacles) clearance = Math.min(clearance, rectDistance(x, z, o));
+    for (const a of avoid) {
+      clearance = Math.min(clearance, Math.hypot(x - a.x, z - a.z) - a.r);
+    }
+    if (clearance > bestClearance) {
+      bestClearance = clearance;
+      best = { x, z };
+    }
   }
-  return null;
+  return best ?? { x: 0, z: 0 };
 }
 
 export function nearestGroundItem(
