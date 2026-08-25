@@ -1722,15 +1722,13 @@ function renderGame(): void {
     minimapCtx.strokeStyle = 'rgba(0, 229, 255, 0.4)';
     minimapCtx.lineWidth = 1.5;
     minimapCtx.strokeRect(2, 2, w - 4, h - 4);
-    // 좌표 변환 (월드 → 미니맵, Y는 위가 +)
-    const wx2mx = (wx: number) => w / 2 + wx * minimapScale;
-    const wz2my = (wz: number) => h / 2 + wz * minimapScale;
+    // 좌표 변환 (월드 → 미니맵, Y는 위가 +) — 호출마다 클로저 생성 대신 인라인 계산
     // 장애물 (회색 박스)
     minimapCtx.fillStyle = 'rgba(120, 100, 140, 0.6)';
     for (const o of mapRefs.obstaclesData) {
       minimapCtx.fillRect(
-        wx2mx(o.x - o.width / 2),
-        wz2my(o.z - o.depth / 2),
+        w / 2 + (o.x - o.width / 2) * minimapScale,
+        h / 2 + (o.z - o.depth / 2) * minimapScale,
         o.width * minimapScale,
         o.depth * minimapScale,
       );
@@ -1738,13 +1736,19 @@ function renderGame(): void {
     // 출구 (노란 원)
     minimapCtx.fillStyle = '#ffd97a';
     minimapCtx.beginPath();
-    minimapCtx.arc(wx2mx(exitPos.x), wz2my(exitPos.z), 4, 0, Math.PI * 2);
+    minimapCtx.arc(w / 2 + exitPos.x * minimapScale, h / 2 + exitPos.z * minimapScale, 4, 0, Math.PI * 2);
     minimapCtx.fill();
     for (const bot of bots) {
       if (bot.out) continue;
       minimapCtx.fillStyle = bot.role === 'tagger' ? '#ff3a5c' : '#00e5ff';
       minimapCtx.beginPath();
-      minimapCtx.arc(wx2mx(bot.mesh.position.x), wz2my(bot.mesh.position.z), 3.5, 0, Math.PI * 2);
+      minimapCtx.arc(
+        w / 2 + bot.mesh.position.x * minimapScale,
+        h / 2 + bot.mesh.position.z * minimapScale,
+        3.5,
+        0,
+        Math.PI * 2,
+      );
       minimapCtx.fill();
     }
     // 자기 (큰 점 + 외곽선, 색은 자기/상대 역할에 따라)
@@ -1753,7 +1757,13 @@ function renderGame(): void {
     minimapCtx.strokeStyle = '#fff';
     minimapCtx.lineWidth = 2;
     minimapCtx.beginPath();
-    minimapCtx.arc(wx2mx(selfMesh.position.x), wz2my(selfMesh.position.z), 4.5, 0, Math.PI * 2);
+    minimapCtx.arc(
+      w / 2 + selfMesh.position.x * minimapScale,
+      h / 2 + selfMesh.position.z * minimapScale,
+      4.5,
+      0,
+      Math.PI * 2,
+    );
     minimapCtx.fill();
     minimapCtx.stroke();
   }
@@ -2748,6 +2758,15 @@ function renderGame(): void {
   const cameraDesired = new THREE.Vector3();
   const cameraLookAt = new THREE.Vector3();
   const cameraFacing = new THREE.Vector3();
+  // 2026-08-25: 프레임당 clone/new 제거용 재사용 버퍼 — 매 프레임 할당이 모바일에서 GC 스파이크 유발
+  const camRayVec = new THREE.Vector3();
+  const camRayOriginVec = new THREE.Vector3();
+  const lookRayVec = new THREE.Vector3();
+  const blockersScratch: THREE.Object3D[] = [];
+  const camRaycaster = new THREE.Raycaster();
+  const lookRaycaster = new THREE.Raycaster();
+  const preyPointsScratch: Array<{ x: number; z: number; mesh: THREE.Object3D; isPlayer: boolean }> =
+    [];
   // 2026-08-15: 카메라 yaw 회전용 임시 객체 (할당 재사용)
   const yawQuatTmp = new THREE.Quaternion();
   const yawAxis = new THREE.Vector3(0, 1, 0);
@@ -3066,10 +3085,9 @@ function renderGame(): void {
       player.setExtraSpeedMul(
         playerSlow ? GAME.itemStickySlowMul : jellyLeft > 0 ? GAME.itemJellySpeedMul : 1,
       );
-      const preyPoints: Array<{ x: number; z: number; mesh: THREE.Object3D; isPlayer: boolean }> =
-        [];
+      preyPointsScratch.length = 0;
       if (!isTagger && !game.out) {
-        preyPoints.push({
+        preyPointsScratch.push({
           x: selfMesh.position.x,
           z: selfMesh.position.z,
           mesh: selfMesh,
@@ -3078,7 +3096,7 @@ function renderGame(): void {
       }
       for (const bot of bots) {
         if (bot.out || bot.role !== 'runner') continue;
-        preyPoints.push({
+        preyPointsScratch.push({
           x: bot.mesh.position.x,
           z: bot.mesh.position.z,
           mesh: bot.mesh,
@@ -3091,11 +3109,11 @@ function renderGame(): void {
       }
       if (taggerAI && smokeLeft <= 0) {
         const locked = chasePrey;
-        const currentPrey = locked ? preyPoints.find((p) => p.mesh === locked.mesh) : undefined;
+        const currentPrey = locked ? preyPointsScratch.find((p) => p.mesh === locked.mesh) : undefined;
         const sticky = pickStickyPoint(
           taggerMesh.position.x,
           taggerMesh.position.z,
-          preyPoints,
+          preyPointsScratch,
           currentPrey,
           GAME.taggerChaseSwitchMargin,
         );
@@ -3137,7 +3155,7 @@ function renderGame(): void {
         const hits = contactsInRange(
           taggerMesh.position.x,
           taggerMesh.position.z,
-          preyPoints,
+          preyPointsScratch,
           GAME.taggerContactDistance,
         );
         const playerHit = hits.find((p) => p.isPlayer);
@@ -3550,17 +3568,19 @@ function renderGame(): void {
     // 4) 2026-08-15: 카메라-장애물 충돌 (벽/박스에 파묻히지 않게)
     // - 카메라 desired 위치에서 캐릭터로 향하는 ray
     // - 사이에 벽/박스 있으면 hit 직전까지만 카메라를 당김
-    const camRay = cameraDesired.clone().sub(selfMesh.position);
+    const camRay = camRayVec.copy(cameraDesired).sub(selfMesh.position);
     camRay.y = 0;
     const camRayDist = camRay.length();
-    const blockers: THREE.Object3D[] = [];
-    for (const w of mapRefs.walls) blockers.push(w);
-    for (const o of mapRefs.obstacles) blockers.push(o);
+    blockersScratch.length = 0;
+    for (const w of mapRefs.walls) blockersScratch.push(w);
+    for (const o of mapRefs.obstacles) blockersScratch.push(o);
     if (camRayDist > 0.01) {
       camRay.normalize();
-      const camRayOrigin = cameraDesired.clone();
-      const ray = new THREE.Raycaster(camRayOrigin, camRay, 0, camRayDist);
-      const hits = ray.intersectObjects(blockers, false);
+      const camRayOrigin = camRayOriginVec.copy(cameraDesired);
+      camRaycaster.set(camRayOrigin, camRay);
+      camRaycaster.near = 0;
+      camRaycaster.far = camRayDist;
+      const hits = camRaycaster.intersectObjects(blockersScratch, false);
       if (hits.length > 0) {
         // 2026-08-15 v2: min distance 1.0 → 0.5 — 더 강하게 캐릭터 가까이
         const safeDist = Math.max(0.5, hits[0].distance - 0.3);
@@ -3572,12 +3592,14 @@ function renderGame(): void {
     // 4.5) 2026-08-15 v2: lookAt raycast — 카메라가 보는 시야에 박스 있으면 보정
     // - 카메라 위치에서 lookAt 방향으로 ray
     // - hit 있으면 lookAt을 hit 직전(살짝 캐릭터 쪽)으로 → 캐릭터가 안 가려지도록
-    const lookRay = cameraLookAt.clone().sub(ctx.camera.position);
+    const lookRay = lookRayVec.copy(cameraLookAt).sub(ctx.camera.position);
     const lookRayDist = lookRay.length();
-    if (lookRayDist > 0.01 && blockers.length > 0) {
-      const lookDir = lookRay.clone().normalize();
-      const lookRayObj = new THREE.Raycaster(ctx.camera.position.clone(), lookDir, 0, lookRayDist);
-      const lookHits = lookRayObj.intersectObjects(blockers, false);
+    if (lookRayDist > 0.01 && blockersScratch.length > 0) {
+      const lookDir = lookRay.normalize();
+      lookRaycaster.set(ctx.camera.position, lookDir);
+      lookRaycaster.near = 0;
+      lookRaycaster.far = lookRayDist;
+      const lookHits = lookRaycaster.intersectObjects(blockersScratch, false);
       if (lookHits.length > 0) {
         // lookAt을 hit의 살짝 위쪽(박스 위 +0.5m)으로 옮김 → 카메라가 박스 너머를 안 봄
         // 가장 가까운 hit의 distance보다 살짝 짧은 곳에서 lookAt
