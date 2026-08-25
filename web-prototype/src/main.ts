@@ -2740,6 +2740,11 @@ function renderGame(): void {
   let reviveHoldProgress = 0; // 0~1
   let reviveHoldTarget: NetPeer | null = null;
   let reviveHoldActive = false;
+  // 2026-08-25: 살리기 cooldown 추적 (클라 측) — 서버 권위 cooldown과 동일 8초.
+  // 홀드 1.5초 후 서버 거절 받기 전에 사전 차단해 UX 손실 줄임.
+  // 서버가 진짜 권위이므로 이 값이 stale해도 서버가 다시 거절함 (안전).
+  const clientReviveCooldownMs = 8000;
+  const clientLastReviveAt = new Map<string, number>();
   // 가장 가까운 OUT된 사람 도망자 찾기 (살리는 쪽 기준)
   function pickReviveTarget(): NetPeer | null {
     let best: NetPeer | null = null;
@@ -2797,9 +2802,18 @@ function renderGame(): void {
         return true;
       }
     }
-    // 가까운 OUT 동료 없음
-    if (!pickReviveTarget()) {
+    // 가까운 OUT 동료 없음 또는 cooldown 중
+    const candidate = pickReviveTarget();
+    if (!candidate) {
       flashReviveDeny('가까운 OUT 동료 없음');
+      return true;
+    }
+    // 2026-08-25: 같은 대상 cooldown — 자기 측 사전 차단으로 1.5초 홀드 후
+    // 서버 거절 받는 UX 손실 방지. 서버가 진짜 권위이므로 stale은 안전.
+    const lastAt = clientLastReviveAt.get(candidate.id);
+    if (lastAt && Date.now() - lastAt < clientReviveCooldownMs) {
+      const remainSec = Math.ceil((clientReviveCooldownMs - (Date.now() - lastAt)) / 1000);
+      flashReviveDeny(`같은 동료는 ${remainSec}초 후`);
       return true;
     }
     return false;
@@ -3557,6 +3571,9 @@ function renderGame(): void {
             if (reviveBtn) reviveBtn.classList.remove('holding');
             if (reviveBarFill) reviveBarFill.style.width = '0%';
             if (reviveStatus) reviveStatus.textContent = '살리는 중...';
+            // 2026-08-25: 클라 측 cooldown 기록 — 같은 대상 재시도 사전 차단용.
+            // 서버가 거절해도 무관 (서버 권위), 짧은 UX 손실 방지.
+            clientLastReviveAt.set(targetId, Date.now());
             net.sendRevive?.(targetId);
             sound.playAbsorbCancel(); // 살리기 시도 = 약간의 SFX 피드백
           }
