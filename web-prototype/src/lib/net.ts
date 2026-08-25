@@ -53,6 +53,13 @@ export class NetClient {
   onEnd: ((winner: NetRole, reason: string) => void) | null = null;
   onLobby: ((c: NetClient) => void) | null = null;
   onError: ((msg: string) => void) | null = null;
+  // 2026-08-25: 연결 끊김 전파 — 끊겨도 유저가 인지 못 하고 멈춘 방에 남아있던 문제 방지.
+  // 성공적인 연결 이후 close/error/무음(15초) 감지 시 소켓 수명당 정확히 1회 호출.
+  onDisconnect: ((reason: 'closed' | 'error' | 'timeout') => void) | null = null;
+  private lastReceivedAt = 0;
+  private silenceTimer: ReturnType<typeof setInterval> | null = null;
+  private disconnectFired = false;
+  private intentionalClose = false;
 
   get isHost(): boolean {
     return this.id !== '' && this.id === this.hostId;
@@ -63,6 +70,8 @@ export class NetClient {
     return new Promise((resolve) => {
       const ws = new WebSocket(url);
       this.ws = ws;
+      this.disconnectFired = false;
+      this.intentionalClose = false;
       const timer = setTimeout(() => {
         if (!this.connected) {
           ws.close();
@@ -72,15 +81,21 @@ export class NetClient {
       ws.onopen = () => {
         this.connected = true;
         clearTimeout(timer);
+        this.startSilenceCheck();
         resolve(true);
       };
       ws.onerror = () => {
+        const wasConnected = this.connected;
         this.connected = false;
         clearTimeout(timer);
         resolve(false);
+        if (wasConnected) this.notifyDisconnect('error');
       };
       ws.onclose = () => {
+        const wasConnected = this.connected;
         this.connected = false;
+        this.stopSilenceCheck();
+        if (wasConnected && !this.intentionalClose) this.notifyDisconnect('closed');
       };
       ws.onmessage = (ev) => this.handle(String(ev.data));
     });
@@ -127,6 +142,8 @@ export class NetClient {
   }
 
   close(): void {
+    this.intentionalClose = true;
+    this.stopSilenceCheck();
     this.ws?.close();
     this.ws = null;
     this.connected = false;
@@ -141,6 +158,7 @@ export class NetClient {
   }
 
   private handle(raw: string): void {
+    this.lastReceivedAt = Date.now();
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(raw) as Record<string, unknown>;
@@ -188,5 +206,29 @@ export class NetClient {
       this.phase = 'ended';
       this.onEnd?.((msg.winner as NetRole) || 'tagger', String(msg.reason || ''));
     }
+  }
+
+  private startSilenceCheck(): void {
+    this.stopSilenceCheck();
+    this.lastReceivedAt = Date.now();
+    this.silenceTimer = setInterval(() => {
+      if (Date.now() - this.lastReceivedAt > 15_000) {
+        this.notifyDisconnect('timeout');
+        this.ws?.close();
+      }
+    }, 5_000);
+  }
+
+  private stopSilenceCheck(): void {
+    if (this.silenceTimer !== null) {
+      clearInterval(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  private notifyDisconnect(reason: 'closed' | 'error' | 'timeout'): void {
+    if (this.disconnectFired) return;
+    this.disconnectFired = true;
+    this.onDisconnect?.(reason);
   }
 }
