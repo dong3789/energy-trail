@@ -3542,6 +3542,18 @@ function renderGame(): void {
         }
       }
 
+      // 2026-08-25: 살리기 버튼 활성/비활성 갱신 — 가까이 살릴 수 있는 OUT 동료가
+      // 있으면 활성화, 없으면 비활성. 매 프레임 평가(피클로 가벼움). 폴링 비용이
+      // 신경 쓰이면 50ms setInterval로 throttle 가능. pickReviveTarget은 OUT + 거리
+      // 둘 다 필터하므로 aliveRunner + 거리 < reviveRange 동시 만족 = 가능.
+      // 자국 부족/마지막 10초는 click 시 explainReviveDenyIfApplicable가 거절하므로
+      // 여기서는 "타겟이 있냐"만 보고 버튼 enable.
+      if (reviveBtn && !game.out && !reviveHoldActive && roundState === 'playing') {
+        const canRevive = pickReviveTarget() !== null;
+        if (canRevive && reviveBtn.disabled) reviveBtn.disabled = false;
+        else if (!canRevive && !reviveBtn.disabled) reviveBtn.disabled = true;
+      }
+
       // 2026-08-25: 살리기 홀드 진행 — R/버튼 누르고 있는 동안 progress 증가
       // 거리/대상 out 변경 시 즉시 취소. 1.0 도달 시 1회만 sendRevive (서버가 권한 검증)
       if (reviveHoldActive && reviveHoldTarget && net) {
