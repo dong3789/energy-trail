@@ -531,4 +531,20 @@ export const GAME = {
   itemStickyDuration: 5.0,
   itemStickyRadius: 2.4,
   itemStickySlowMul: 0.45,
+
+  // 2026-08-25: 동료 살리기 (Revive) — 자국 3개를 써서 OUT된 도망자를 가장자리로 부활
+  // - 승리용 자국을 깎아서 살리면 밸런스 안 깨진다 (4번 살리면 사실상 승리 루트 포기)
+  // - 시체 위치가 아닌 가장자리 → 술래 위에 던지지 않게
+  // - 1.5초 홀드 → 흡수(즉시)보다 살짝 위험하게
+  // - 부활 무적 1초 → 흡수 무적(2초)보다 약하게 (전투 리셋 아님)
+  // - 마지막 10초 불가 → 종료 직전 무한 리셋 방지
+  // - 사람 도망자만 (AI 살리기 금지) — 솔로/AI전도 비활성
+  // - 술래 승 조건: 동시 다운 2명 (taggerWinOutCount 2 활용)
+  reviveEnabled: true,
+  reviveTrailCost: 3,
+  reviveHoldSeconds: 1.5,
+  reviveInvulnerabilitySeconds: 1.0,
+  reviveNoLastSeconds: 10.0, // 남은 시간 ≤ 10초면 불가
+  reviveRange: 3.5, // 살리는 쪽 → 시체까지 최대 거리 (m)
+  reviveEdgeMargin: 3.0, // 가장자리 스폰 마진 (맵 가장안쪽 좌/우/위/아래로부터 m)
 } as const;

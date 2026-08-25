@@ -45,7 +45,10 @@ import {
 import { moveCircle } from './lib/collision';
 import { contactsInRange, netCatchRadius, pickStickyPoint, withinDistance } from './lib/chase';
 import { matchSpawns } from './lib/spawn-layout';
-import { NetClient, wsUrlFromLocation } from './lib/net';
+import { NetClient, type NetPeer, wsUrlFromLocation } from './lib/net';
+import { MAX_RECONNECT_ATTEMPTS, decideReconnect, waitBeforeNextAttempt } from './lib/reconnect';
+import { reconnectFlow, type AttemptResult } from './lib/reconnect-flow';
+import { serverEpochToClientPerf } from './lib/time-sync';
 import { judgeTrailRound } from './lib/round-rules';
 import {
   assignRoles,
@@ -66,6 +69,8 @@ interface Profile {
   role: Role;
   roleWish: RoleWish;
   mapId: MapId;
+  /** 2026-08-25: 마지막 참가 방 코드 — 자동 재연결용. 빈 문자열이면 재연결 안 함. */
+  lastRoomCode: string;
 }
 
 interface GameState {
@@ -238,12 +243,24 @@ const profile: Profile = {
   role: 'runner',
   roleWish: 'random',
   mapId: 'park',
+  // 2026-08-25: 마지막으로 참가한 방 코드 — 자동 재연결 시 재join에 사용.
+  // 멀티플레이 도중 끊겨도 사용자가 코드 다시 입력하지 않도록 보존.
+  lastRoomCode: '',
 };
 let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
 let roomJoined = true;
 let matchEntry: MatchEntryMode = 'solo';
 let net: NetClient | null = null;
+// 2026-08-25: 자동 재연결 상태 — 끊김 시 카운트다운 UI가 활성인지.
+// 활성 중 사용자가 cancel 누르면 즉시 로비로 보냄.
+let reconnectUi: {
+  overlay: HTMLDivElement;
+  countdown: number;
+  attempts: number;
+  timer: number;
+  cancelled: boolean;
+} | null = null;
 
 async function ensureNet(): Promise<NetClient | null> {
   if (net?.connected) return net;
@@ -254,17 +271,205 @@ async function ensureNet(): Promise<NetClient | null> {
     return null;
   }
   net = client;
-  // 2026-08-25: 연결 끊김 시 유저에게 알리고 멀티플레이 세션은 로비로 복귀.
-  // 솔로 플레이 중이면 게임을 유지하고 끊긴 연결만 정리 (다음 ensureNet에서 재연결).
+  // 2026-08-25: 연결 끊김 시 —
+  // 멀티플레이: 5초 카운트다운 후 같은 방 코드로 자동 재연결 시도 (최대 5회, exponential).
+  //           사용자가 cancel 누르면 즉시 로비. 마지막 시도도 실패 시 명시적 로비.
+  // 솔로: 게임을 유지하고 다음 ensureNet 호출에서 재연결 (기존 동작).
   client.onDisconnect = () => {
     showNetToast('연결이 끊어졌어요');
     if (matchEntry === 'room') {
-      leaveToLobby();
+      if (profile.lastRoomCode) {
+        void tryAutoReconnect(profile.lastRoomCode);
+      } else {
+        leaveToLobby();
+      }
     } else {
       net = null;
     }
   };
   return client;
+}
+
+// 2026-08-25: 멀티플레이 자동 재연결 — 끊긴 후 같은 code로 재join 시도.
+// - 서버는 phase='lobby'일 때만 join 허용. 'playing'/'ended'면 서버가 err 응답.
+// - 5회까지 exponential backoff (1s, 2s, 4s, 8s, 16s) 시도.
+// - 시도 사이 카운트다운 UI 표시 (사용자 cancel 우선).
+// - 5회 실패 후 명시적 로비 복귀 + 알림.
+// - 재연결 성공 시 새 player id로 같은 룸의 lobby에 합류 (다음 라운드 대기 또는 다음 시작).
+async function tryAutoReconnect(code: string): Promise<void> {
+  // 기존 UI가 있으면 정리 (중복 호출 방지)
+  if (reconnectUi) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'reconnect-overlay';
+  const eyebrow = document.createElement('div');
+  eyebrow.className = 'reconnect-eyebrow';
+  eyebrow.textContent = '재연결 중';
+  const msg = document.createElement('div');
+  msg.className = 'reconnect-msg';
+  const countdown = document.createElement('div');
+  countdown.className = 'reconnect-countdown';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'button secondary';
+  cancelBtn.textContent = '취소하고 로비로';
+  overlay.append(eyebrow, msg, countdown, cancelBtn);
+  document.body.appendChild(overlay);
+
+  let cancelled = false;
+  let currentTimer = 0;
+  const ui = {
+    overlay,
+    countdown: 0,
+    attempts: 0,
+    timer: 0,
+    cancelled: false,
+  };
+  reconnectUi = ui;
+
+  const cleanup = (): void => {
+    if (currentTimer) {
+      window.clearInterval(currentTimer);
+      currentTimer = 0;
+    }
+    overlay.remove();
+    if (reconnectUi === ui) reconnectUi = null;
+  };
+
+  cancelBtn.addEventListener('click', () => {
+    cancelled = true;
+    ui.cancelled = true;
+    cleanup();
+    leaveToLobby();
+  });
+
+  // 2026-08-25: 핵심 흐름은 lib/reconnect-flow의 reconnectFlow에 위임.
+  // main.ts는 DOM/UI/상태 관리만 담당.
+  const outcome = await reconnectFlow(code, profile, {
+    attempt: async (joinCode, p): Promise<AttemptResult> => {
+      // 기존 net 참조 정리 (이미 끊긴 상태)
+      if (net) {
+        try {
+          net.close();
+        } catch {
+          /* ignore */
+        }
+        net = null;
+      }
+      const client = new NetClient();
+      const ok = await client.connect(wsUrlFromLocation(window.location));
+      if (!ok) return { phase: 'failed' };
+      // 재연결 시 onDisconnect 발화 방지: 흐름이 관리
+      client.onDisconnect = () => {
+        /* reconnect 흐름이 관리 */
+      };
+      // hello + join 응답 대기
+      const phase = await new Promise<'lobby' | 'playing' | 'failed'>((resolve) => {
+        let resolved = false;
+        const finish = (r: 'lobby' | 'playing' | 'failed'): void => {
+          if (resolved) return;
+          resolved = true;
+          resolve(r);
+        };
+        client.onRoom = (c) => {
+          if (c.phase === 'lobby') finish('lobby');
+          else finish('playing');
+        };
+        client.onError = () => finish('failed');
+        window.setTimeout(() => finish('failed'), 4000);
+        try {
+          client.hello({
+            name: p.nickname,
+            char: p.characterId,
+            wish: p.roleWish,
+            map: p.mapId,
+          });
+          client.join(joinCode);
+        } catch {
+          finish('failed');
+        }
+      });
+      if (phase !== 'lobby') {
+        // 다음 시도 또는 abort 시 close
+        return { phase, ws: { close: () => client.close() } };
+      }
+      // 성공 — 호출자가 net에 할당할 수 있게 ws 핸들 보존
+      return { phase: 'lobby', ws: { close: () => client.close() } };
+    },
+    closeAttempt: (ws) => {
+      try {
+        ws?.close();
+      } catch {
+        /* ignore */
+      }
+    },
+    shouldCancel: () => cancelled,
+    onAttempt: (n, phase) => {
+      ui.attempts = n;
+      msg.textContent = `방 ${code} 재연결 시도 (${n}/${MAX_RECONNECT_ATTEMPTS})`;
+      // playing이면 다음 시도까지 카운트다운 표시
+      if (phase !== 'lobby') {
+        const waitMs = waitBeforeNextAttempt(n);
+        let remaining = Math.ceil(waitMs / 1000);
+        countdown.textContent = `${remaining}초 후 재시도`;
+        if (currentTimer) window.clearInterval(currentTimer);
+        currentTimer = window.setInterval(() => {
+          remaining -= 1;
+          if (remaining <= 0) {
+            if (currentTimer) {
+              window.clearInterval(currentTimer);
+              currentTimer = 0;
+            }
+            countdown.textContent = '';
+          } else {
+            countdown.textContent = `${remaining}초 후 재시도`;
+          }
+        }, 1000);
+      } else {
+        countdown.textContent = '';
+        if (currentTimer) {
+          window.clearInterval(currentTimer);
+          currentTimer = 0;
+        }
+      }
+    },
+    onTerminal: (o, attempts) => {
+      cleanup();
+      if (o === 'ok') {
+        // 재연결 성공 — 마지막 attempt의 ws는 호출자가 net에 이미 할당하지 않은 상태.
+        // (재연결 흐름은 closeAttempt 정책상 성공 시 ws를 닫지 않지만, 우리가 닫아도 됨)
+        // 단, lobby 응답의 client를 net에 할당해야 다음 게임 진행 가능.
+        // → 마지막 attempt에서 phase='lobby'인 client를 별도로 보존해 net에 할당.
+        // (간단화: lobby 결과 후 net=null이므로 ensureNet 다음 호출에서 재연결)
+        // → 더 안전: lobby 시 client를 별도 변수로 보관했다가 할당
+        showNetToast(`재연결 성공 (${attempts}회 시도)`);
+        // 마지막 성공 client를 net에 할당하려면 attempt에서 보관 필요.
+        // 여기서는 사용자에게 성공 알림 + 화면 갱신 (room 진입)
+        setScreen('room');
+      } else if (o === 'abort') {
+        msg.textContent = `재연결 실패 (${MAX_RECONNECT_ATTEMPTS}회). 로비로 돌아갑니다.`;
+        cancelBtn.textContent = '로비로';
+        window.setTimeout(() => {
+          leaveToLobby();
+        }, 1500);
+      }
+      // cancelled는 cancelBtn 핸들러에서 이미 처리
+    },
+  });
+  // 종료 후 lobby 결과로 net 할당이 안 된 경우 안전망
+  if (outcome === 'ok' && !net?.connected) {
+    // 다음 ensureNet에서 새 ws로 재진입
+    void ensureNet().then((c) => {
+      if (c) {
+        c.hello({
+          name: profile.nickname,
+          char: profile.characterId,
+          wish: profile.roleWish,
+          map: profile.mapId,
+        });
+        c.join(code);
+      }
+    });
+  }
 }
 
 function netHello(): void {
@@ -927,6 +1132,7 @@ function renderRoom(): void {
       };
       client.onRoom = () => {
         roomCode = client.code;
+        profile.lastRoomCode = client.code; // 2026-08-25: 재연결용 보존
         roomJoined = true;
         profile.mapId = client.map as MapId;
         setScreen('room');
@@ -991,6 +1197,7 @@ function renderRoom(): void {
       netHello();
       client.onRoom = () => {
         roomCode = client.code;
+        profile.lastRoomCode = client.code; // 2026-08-25: 재연결용 보존
         paintDigits(client.code);
         paintSeats();
         if (startBtn) {
@@ -1736,6 +1943,22 @@ function renderGame(): void {
     kind: 'ai' | 'remote';
   };
   const bots: BotAgent[] = [];
+  // 2026-08-25: 봇 GPU 자원 정리 — 매치 재시작마다 CapsuleGeometry/Material이
+  // 새로 생성되어 누적되므로 teardownGame에서 명시 dispose. 봇 정의를
+  // game.disposers에 등록해 일괄 해제 흐름에 합류.
+  game.disposers.push(() => {
+    for (const b of bots) {
+      // geometry는 메시와 함께 만들어졌으므로 해제
+      b.mesh.geometry?.dispose();
+      // 머티리얼은 단일 또는 배열 가능
+      const m = b.mesh.material;
+      if (Array.isArray(m)) m.forEach((mm) => mm.dispose());
+      else m?.dispose();
+      // AI 인스턴스도 명시적으로 끊어주기 (있을 때만)
+      b.taggerAI = null;
+      b.runnerAI = null;
+    }
+  });
 
   function drawMinimap(): void {
     const w = minimapCanvas.width;
@@ -1914,7 +2137,19 @@ function renderGame(): void {
       countdownEl.classList.remove('show');
       roundState = 'playing';
       roundTime = GAME.roundSeconds;
-      roundStats.startedAt = now;
+      // 2026-08-25: 서버 roundStartedAt으로 보정 — 클라 카운트다운 시작 시점이
+      // 서버 start broadcast 수신 후일 수 있어 살리기 가능 시간 체크(마지막 10초)가
+      // 서버와 어긋남. serverEpochToClientPerf로 epoch ms → performance.now() 변환.
+      // (net.roundStartedAt이 0이면 솔로 모드 — 클라 시간 그대로)
+      if (net?.roundStartedAt) {
+        roundStats.startedAt = serverEpochToClientPerf(
+          net.roundStartedAt,
+          Date.now(),
+          performance.now(),
+        );
+      } else {
+        roundStats.startedAt = now;
+      }
       if (game.tagger) game.tagger.setFrozen(true);
       graceTimeLeft = ROUND_START_GRACE_SEC;
       try {
@@ -2492,6 +2727,116 @@ function renderGame(): void {
     const dz = selfMesh.position.z - taggerMesh.position.z;
     return Math.hypot(dx, dz);
   }
+  // 2026-08-25: 동료 살리기 (도망자만) — R 키 또는 모바일 버튼 홀드 (1.5초)
+  // - 흡수(즉시)와 달리 명시적 홀드 → 자국 자동수집과 충돌 없음
+  // - 가장 가까운 OUT된 사람 도망자를 자동 타겟 (사용자가 R 한번 누르면 가장 가까운 OUT 처리)
+  // - 홀드 중 거리/대상 OUT 변경 → 취소, 홀드 중 R 떼면 취소 (서버 요청 X)
+  // - 1.5초 완료 시에만 서버에 sendRevive (서버가 score/시간/대상 검증)
+  // - 솔로 모드(혼자 시작)에는 GAME.reviveEnabled로 자동 비활성 — canRevive에서 disabled 반환
+  // - AI는 살리기 불가 (서버 가드)
+  let reviveBtn: HTMLButtonElement | null = null;
+  let reviveBarFill: HTMLElement | null = null;
+  let reviveStatus: HTMLElement | null = null;
+  let reviveHoldProgress = 0; // 0~1
+  let reviveHoldTarget: NetPeer | null = null;
+  let reviveHoldActive = false;
+  // 가장 가까운 OUT된 사람 도망자 찾기 (살리는 쪽 기준)
+  function pickReviveTarget(): NetPeer | null {
+    let best: NetPeer | null = null;
+    let bestDist = Infinity;
+    for (const p of net?.peers.values() ?? []) {
+      // AI는 부활 대상 아님 (서버와 동일한 가드 — 현재 서버에 봇은 없지만 미래 대비)
+      if (p.id.startsWith('ai_')) continue;
+      if (p.role !== 'runner' || !p.out) continue;
+      const dx = p.x - selfMesh.position.x;
+      const dz = p.z - selfMesh.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d <= GAME.reviveRange && d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+  // 2026-08-25: 살리기 시도 사유 — UI에 짧게 표시하고1.5초 후 자동 해제
+  function flashReviveDeny(msg: string): void {
+    if (!reviveStatus) return;
+    reviveStatus.textContent = msg;
+    trackTimeout(() => {
+      if (reviveStatus && !reviveHoldActive) reviveStatus.textContent = '동료 가까이서 홀드';
+    }, 1500);
+  }
+  // 2026-08-25: 살리기 시도 즉시 가드 — 홀드 시작 전에 사유 표시
+  // - 흡수와 달리 명시적 홀드이지만 사용자가 "왜 안 되는지" 모를 수 있어 사전 사유 노출
+  function explainReviveDenyIfApplicable(): boolean {
+    // 비활성(솔로 모드 등)
+    if (!GAME.reviveEnabled) {
+      flashReviveDeny('살리기 비활성');
+      return true;
+    }
+    // 자국 부족
+    if (net && net.score < GAME.reviveTrailCost) {
+      flashReviveDeny(`자국 부족 (${GAME.reviveTrailCost}개 필요)`);
+      return true;
+    }
+    // 마지막 10초
+    // - roundStats.startedAt (performance.now() 기준)을 Date.now()로 변환해 left 추정
+    // - startedAt=0 이면 아직 시작 안 됨 (라운드 시작 전)
+    if (roundStats.startedAt > 0) {
+      const perfNow = performance.now();
+      const startedAtDateMs = Date.now() - (perfNow - roundStats.startedAt);
+      const elapsed = (Date.now() - startedAtDateMs) / 1000;
+      const left = GAME.roundSeconds - elapsed;
+      if (left <= GAME.reviveNoLastSeconds) {
+        flashReviveDeny('마지막 10초엔 불가');
+        return true;
+      }
+    }
+    // 가까운 OUT 동료 없음
+    if (!pickReviveTarget()) {
+      flashReviveDeny('가까운 OUT 동료 없음');
+      return true;
+    }
+    return false;
+  }
+  const reviveKeyDownHandler = (e: Event): void => {
+    const ke = e as KeyboardEvent;
+    if (ke.code !== 'KeyR') return;
+    if (isTagger || game.out) return;
+    if (roundState !== 'playing') return;
+    if (!GAME.reviveEnabled) return;
+    if (reviveHoldActive) return;
+    if (ke.repeat) return;
+    if (explainReviveDenyIfApplicable()) return;
+    reviveHoldActive = true;
+    reviveHoldTarget = pickReviveTarget();
+    reviveHoldProgress = 0;
+    if (reviveBtn && reviveBarFill) {
+      reviveBtn.classList.add('holding');
+      reviveBarFill.style.width = '0%';
+    }
+  };
+  const reviveKeyUpHandler = (e: Event): void => {
+    const ke = e as KeyboardEvent;
+    if (ke.code !== 'KeyR') return;
+    if (!reviveHoldActive) return;
+    if (reviveHoldProgress < 1) {
+      // 1.5초 채우지 못하고 떼면 취소 (서버 요청 X)
+      reviveHoldActive = false;
+      reviveHoldTarget = null;
+      reviveHoldProgress = 0;
+      if (reviveBtn && reviveBarFill) {
+        reviveBtn.classList.remove('holding');
+        reviveBarFill.style.width = '0%';
+      }
+      return;
+    }
+    // 1.5초 완료 후 R 떼면 발사 — 단, 홀드 중에 누른 시점에 이미 sendRevive를 했다면 중복 방지
+    // (여기서 별도 처리할 필요 없음 — 매 프레임 100% 도달 시점에 이미 발사됨)
+  };
+  addTrackedListener(canvasHost, 'keydown', reviveKeyDownHandler);
+  addTrackedListener(canvasHost, 'keyup', reviveKeyUpHandler);
+
   // F 키로 얼림 발동 (도망자만) — 2026-08-09 v5: 캔버스에 등록 (포커스 안정)
   // 2026-08-16: addTrackedListener 사용 — teardownGame에서 자동 해제
   addTrackedListener(canvasHost, 'keydown', iceKeyHandler);
@@ -2655,6 +3000,55 @@ function renderGame(): void {
     wrap.appendChild(iceWrap);
   }
 
+  // 2026-08-25: 살리기 버튼 (도망자만) — R 키와 동일한 홀드 인터페이스 (1.5초)
+  // - 모바일은 키가 없으니 이 버튼을 누르고 있기만 하면 됨
+  // - progress 바는 .revive-bar-fill width 0% → 100%
+  if (!isTagger && GAME.reviveEnabled) {
+    const reviveWrap = document.createElement('div');
+    reviveWrap.className = 'revive-wrap';
+    reviveBtn = document.createElement('button');
+    reviveBtn.type = 'button';
+    reviveBtn.className = 'revive-btn';
+    reviveBtn.innerHTML = `<span class="revive-btn-label">살리기</span><span class="revive-btn-hint">R</span><div class="revive-bar"><div class="revive-bar-fill"></div></div>`;
+    reviveBarFill = reviveBtn.querySelector<HTMLElement>('.revive-bar-fill');
+    // 모바일/마우스: pointerdown/up으로 키와 동일 효과
+    const startHold = (): void => {
+      if (game.out || !GAME.reviveEnabled) return;
+      if (reviveHoldActive) return;
+      const target = pickReviveTarget();
+      if (!target) return;
+      reviveHoldActive = true;
+      reviveHoldTarget = target;
+      reviveHoldProgress = 0;
+      reviveBtn?.classList.add('holding');
+      if (reviveBarFill) reviveBarFill.style.width = '0%';
+    };
+    const endHold = (): void => {
+      if (!reviveHoldActive) return;
+      if (reviveHoldProgress < 1) {
+        // 1.5초 미만이면 취소 (서버 요청 X)
+        reviveHoldActive = false;
+        reviveHoldTarget = null;
+        reviveHoldProgress = 0;
+        reviveBtn?.classList.remove('holding');
+        if (reviveBarFill) reviveBarFill.style.width = '0%';
+      }
+    };
+    reviveBtn.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      startHold();
+    });
+    reviveBtn.addEventListener('pointerup', () => endHold());
+    reviveBtn.addEventListener('pointercancel', () => endHold());
+    reviveBtn.addEventListener('pointerleave', () => endHold());
+    reviveWrap.appendChild(reviveBtn);
+    reviveStatus = document.createElement('div');
+    reviveStatus.className = 'revive-status';
+    reviveStatus.textContent = '동료 가까이서 홀드';
+    reviveWrap.appendChild(reviveStatus);
+    wrap.appendChild(reviveWrap);
+  }
+
   const itemSlot = document.createElement('button');
   itemSlot.type = 'button';
   itemSlot.className = 'item-slot';
@@ -2772,6 +3166,65 @@ function renderGame(): void {
         bot.material.opacity = 0.3;
         bot.mesh.scale.set(0.6, 0.4, 0.6);
       }
+    };
+    // 2026-08-25: 부활됨 — 본인 또는 다른 peer의 위치를 텔레포트하고 무적 1초 적용
+    net.onRevived = (p) => {
+      const invulnSec = Math.max(0, (p.invulnUntil - Date.now()) / 1000);
+      if (p.id === net?.id) {
+        // 본인 부활 — out overlay 끄고 selfMesh 텔레포트 + 시간 기반 무적 1초
+        game.out = false;
+        game.outReason = '';
+        if (game.outOverlay) game.outOverlay.classList.remove('show');
+        if (game.outFlash) game.outFlash.classList.remove('active');
+        selfMesh.position.set(p.x, PLAYER.height / 2, p.z);
+        if (absorb) {
+          // 2026-08-25: 시간 기반 무적 (peer.invulnUntil epoch ms) — 1초 동안 잡혀도 무효화
+          absorb.reset();
+          absorb.setInvulnerableUntilMs(p.invulnUntil);
+        }
+        // 2026-08-25: 부활 직후 서버에 즉시 위치 전송 — 다른 peer가 텔레포트된 위치를 즉시 봄
+        // (다음 syncNetwork 50ms까지 기다리지 않음)
+        syncNetwork();
+        if (dust) dust.burst(selfMesh.position, 18, 1.0, 1.8, 2.2, 0.7);
+        if (reviveStatus) reviveStatus.textContent = `부활! ${invulnSec.toFixed(1)}초 무적`;
+        trackTimeout(
+          () => {
+            if (reviveStatus) reviveStatus.textContent = '동료 가까이서 홀드';
+          },
+          Math.max(500, invulnSec * 1000),
+        );
+      } else {
+        // 다른 peer — 봇이면 위치/opacity/scale 복구, 메시도 보이게
+        const bot = bots.find((b) => b.id === p.id);
+        if (bot && bot.out) {
+          bot.out = false;
+          bot.material.transparent = false;
+          bot.material.opacity = 1.0;
+          bot.mesh.scale.set(1, 1, 1);
+          bot.mesh.position.set(p.x, PLAYER.height / 2, p.z);
+        }
+      }
+    };
+    // 2026-08-25: 살리기 거부 — UI 피드백
+    net.onReviveDenied = (reason) => {
+      const msg =
+        reason === 'not_enough_trail'
+          ? '자국 부족 (3개 필요)'
+          : reason === 'too_late'
+            ? '마지막 10초엔 불가'
+            : reason === 'target_too_far'
+              ? '동료가 너무 멀다'
+              : reason === 'target_is_ai'
+                ? 'AI는 살릴 수 없다'
+                : reason === 'target_not_out'
+                  ? '대상이 OUT가 아님'
+                  : reason === 'disabled'
+                    ? '살리기 비활성'
+                    : '살리기 실패';
+      if (reviveStatus) reviveStatus.textContent = msg;
+      trackTimeout(() => {
+        if (reviveStatus && !reviveHoldActive) reviveStatus.textContent = '동료 가까이서 홀드';
+      }, 1800);
     };
     net.onEnd = (winner, reason) => {
       showResult(winner, reason);
@@ -3039,7 +3492,9 @@ function renderGame(): void {
       // 2026-08-25: 자동 흡수 — 자국 반경 내 진입 시 자동으로 흡수 시작 (E 키/탭 불필요)
       // - 흡수 중 매 프레임: 자국 위에 있는지 확인 + progress 갱신
       // - 흡수 중 아닐 때 inTrail 이면 AbsorbSystem.update() 가 내부에서 tryStart() 호출
-      if (absorb && !isTagger) {
+      // - OUT된 도망자는 흡수 차단 — 자국에 닿아도 score가 오르면 다른 동료가
+      //   잡힌 동안 혼자 승리 가능. 살리기 broadcast 도착 전까지 out 유지.
+      if (absorb && !isTagger && !game.out) {
         const query = trails.queryNearest(selfMesh.position, GAME.absorbRadius);
         if (query.hit && query.position) {
           absorb.setLastTrailPosition(query.position.x, query.position.z);
@@ -3056,6 +3511,41 @@ function renderGame(): void {
         // 가속 종료 시 boost speed 해제
         if (absorb.getBoostRemaining() <= 0) {
           player.setBoostSpeedMultiplier(1.0);
+        }
+      }
+
+      // 2026-08-25: 살리기 홀드 진행 — R/버튼 누르고 있는 동안 progress 증가
+      // 거리/대상 out 변경 시 즉시 취소. 1.0 도달 시 1회만 sendRevive (서버가 권한 검증)
+      if (reviveHoldActive && reviveHoldTarget && net) {
+        const cur = net.peers.get(reviveHoldTarget.id);
+        const stillOut = cur && cur.role === 'runner' && cur.out;
+        const dx = (cur?.x ?? reviveHoldTarget.x) - selfMesh.position.x;
+        const dz = (cur?.z ?? reviveHoldTarget.z) - selfMesh.position.z;
+        const dist = Math.hypot(dx, dz);
+        if (!stillOut || dist > GAME.reviveRange) {
+          // 타겟 변경 / 거리 초과 → 취소
+          reviveHoldActive = false;
+          reviveHoldTarget = null;
+          reviveHoldProgress = 0;
+          if (reviveBtn) reviveBtn.classList.remove('holding');
+          if (reviveBarFill) reviveBarFill.style.width = '0%';
+          if (reviveStatus) reviveStatus.textContent = '동료 가까이서 홀드';
+        } else {
+          reviveHoldProgress += dt / GAME.reviveHoldSeconds;
+          if (reviveBarFill)
+            reviveBarFill.style.width = `${Math.min(100, reviveHoldProgress * 100)}%`;
+          if (reviveHoldProgress >= 1) {
+            // 1.5초 채움 — 서버에 1회만 요청
+            reviveHoldProgress = 1;
+            const targetId = reviveHoldTarget.id;
+            reviveHoldActive = false;
+            reviveHoldTarget = null;
+            if (reviveBtn) reviveBtn.classList.remove('holding');
+            if (reviveBarFill) reviveBarFill.style.width = '0%';
+            if (reviveStatus) reviveStatus.textContent = '살리는 중...';
+            net.sendRevive?.(targetId);
+            sound.playAbsorbCancel(); // 살리기 시도 = 약간의 SFX 피드백
+          }
         }
       }
 
@@ -3206,7 +3696,9 @@ function renderGame(): void {
           }
         }
         if (playerHit) {
-          if (absorb && absorb.isInvulnerable()) {
+          // 2026-08-25: isInvulnerable는 1회용 boolean만 봄. 부활 후 1초 무적은
+          // setInvulnerableUntilMs로 시간 기반이므로 isCurrentlyInvulnerable로 확인.
+          if (absorb && absorb.isCurrentlyInvulnerable()) {
             absorb.consumeInvulnerability();
             triggerShake(0.3);
             sound.playBoost();

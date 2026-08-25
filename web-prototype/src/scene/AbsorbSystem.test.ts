@@ -234,4 +234,45 @@ describe('AbsorbSystem (자국 흡수 — 즉시 흡수 모드)', () => {
       expect(GAME.absorbCooldownSeconds).toBe(4.0);
     });
   });
+
+  describe('시간 기반 무적 (setInvulnerableUntilMs / isCurrentlyInvulnerable)', () => {
+    // 2026-08-25: 부활 시 1초 무적은 1회용 boolean이 아닌 epoch ms 기반.
+    // - isInvulnerable()는 흡수 직후 1회용만 반영
+    // - isCurrentlyInvulnerable()는 둘 다 반영 (만료 시 false)
+
+    it('setInvulnerableUntilMs(미래) → isCurrentlyInvulnerable() true', () => {
+      absorb.setInvulnerableUntilMs(Date.now() + 1000);
+      expect(absorb.isCurrentlyInvulnerable()).toBe(true);
+    });
+
+    it('setInvulnerableUntilMs(과거) → isCurrentlyInvulnerable() false', () => {
+      absorb.setInvulnerableUntilMs(Date.now() - 1000);
+      expect(absorb.isCurrentlyInvulnerable()).toBe(false);
+    });
+
+    it('update 경과로 시간 기반 무적 만료 (inTrail=false로 흡수 트리거 회피)', () => {
+      // inTrail=true면 update()가 흡수 complete를 트리거해 invulnerable을 다시 켤 수 있음
+      // → 무적 만료 동작만 검증하려면 inTrail=false
+      absorb.setInvulnerableUntilMs(Date.now() + 100);
+      expect(absorb.isCurrentlyInvulnerable()).toBe(true);
+      // 만료 시점으로 재설정 후 update — inTrail=false로 흡수 트리거 회피
+      absorb.setInvulnerableUntilMs(Date.now() - 1);
+      absorb.update(0.016, false, false);
+      expect(absorb.isCurrentlyInvulnerable()).toBe(false);
+    });
+
+    it('시간 기반 무적은 1회용 consumeInvulnerability()로 소진되지 않음', () => {
+      // 시간 기반 무적은 isCurrentlyInvulnerable에서 매번 확인 → 소진 개념 없음
+      absorb.setInvulnerableUntilMs(Date.now() + 1000);
+      expect(absorb.consumeInvulnerability()).toBe(true); // 1회용 소진
+      // 시간 기반은 그대로 유지
+      expect(absorb.isCurrentlyInvulnerable()).toBe(true);
+    });
+
+    it('reset()은 시간 기반 무적도 함께 해제', () => {
+      absorb.setInvulnerableUntilMs(Date.now() + 1000);
+      absorb.reset();
+      expect(absorb.isCurrentlyInvulnerable()).toBe(false);
+    });
+  });
 });

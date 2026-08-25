@@ -18,6 +18,8 @@ export interface NetPeer {
   yaw: number;
   out: boolean;
   role: string;
+  /** 2026-08-25: 부활 무적 (reviveInvulnerabilitySeconds) — 0이면 무적 아님 */
+  invulnUntil?: number;
 }
 
 export interface NetHello {
@@ -44,12 +46,18 @@ export class NetClient {
   roles: Record<string, NetRole> = {};
   spawns: Record<string, { x: number; z: number }> = {};
   score = 0;
+  /** 2026-08-25: 서버 roundStartedAt (epoch ms) — start 메시지에서 수신. */
+  roundStartedAt = 0;
   connected = false;
   lastError = '';
   private pending: Array<(ok: boolean) => void> = [];
   onRoom: ((c: NetClient) => void) | null = null;
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
+  /** 2026-08-25: 부활됨 (id, x, z, invulnUntil) — 메인 루프에서 위치 텔레포트 + 무적 적용 */
+  onRevived: ((p: { id: string; x: number; z: number; invulnUntil: number }) => void) | null = null;
+  /** 2026-08-25: 살리기 실패 (사유) — UI 피드백 */
+  onReviveDenied: ((reason: string) => void) | null = null;
   onEnd: ((winner: NetRole, reason: string) => void) | null = null;
   onLobby: ((c: NetClient) => void) | null = null;
   onError: ((msg: string) => void) | null = null;
@@ -141,6 +149,11 @@ export class NetClient {
     this.send({ t: 'catch', id });
   }
 
+  /** 2026-08-25: 살리기 요청 — 서버가 score/거리/시간 검증 후 응답 */
+  sendRevive(targetId: string): void {
+    this.send({ t: 'revive', id: targetId });
+  }
+
   close(): void {
     this.intentionalClose = true;
     this.stopSilenceCheck();
@@ -165,6 +178,17 @@ export class NetClient {
     } catch {
       return;
     }
+    // 2026-08-25: 메시지 처리 throw 격리 — 한 메시지의 버그가 ws 큐의
+    // 나머지 메시지 처리를 막거나 onDisconnect 같은 상태 변경을 누락시키지 않도록.
+    // onCaught/onRevived 같은 콜백 throw도 포함.
+    try {
+      this.processMessage(msg);
+    } catch (err) {
+      console.error('[net.handle] processMessage threw:', err, msg);
+    }
+  }
+
+  private processMessage(msg: Record<string, unknown>): void {
     const t = msg.t;
     if (t === 'welcome' && typeof msg.id === 'string') this.id = msg.id;
     if (t === 'err' && typeof msg.msg === 'string') {
@@ -193,6 +217,7 @@ export class NetClient {
           ? (msg.spawns as Record<string, { x: number; z: number }>)
           : {};
       this.map = String(msg.map || this.map);
+      this.roundStartedAt = typeof msg.roundStartedAt === 'number' ? msg.roundStartedAt : 0;
       this.phase = 'playing';
       this.onStart?.(this);
     }
@@ -202,6 +227,15 @@ export class NetClient {
     }
     if (t === 'score' && typeof msg.n === 'number') this.score = msg.n;
     if (t === 'caught' && typeof msg.id === 'string') this.onCaught?.(msg.id);
+    // 2026-08-25: 부활됨 — 위치 텔레포트 + 무적 적용
+    if (t === 'revived' && typeof msg.id === 'string') {
+      const inv = typeof msg.invulnUntil === 'number' ? msg.invulnUntil : 0;
+      const x = typeof msg.x === 'number' ? msg.x : 0;
+      const z = typeof msg.z === 'number' ? msg.z : 0;
+      this.onRevived?.({ id: msg.id, x, z, invulnUntil: inv });
+    }
+    // 2026-08-25: 살리기 거부 — 사유를 그대로 클라에 통보
+    if (t === 'reviveDenied' && typeof msg.reason === 'string') this.onReviveDenied?.(msg.reason);
     if (t === 'end') {
       this.phase = 'ended';
       this.onEnd?.((msg.winner as NetRole) || 'tagger', String(msg.reason || ''));
