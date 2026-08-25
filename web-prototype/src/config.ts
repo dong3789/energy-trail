@@ -438,8 +438,12 @@ export const GAME = {
   trailPoolSize: 140, // 자국 오브젝트 풀 초기 크기
 
   // 흡수 (Phase B+ 확장 자리)
-  // 2026-08-25: 자동 수집 — E 키/탭 불필요, 자국 반경 내 1초 정지 시 자동 완료
-  absorbSeconds: 1.0,
+  // 2026-08-25: 자동 수집 — E 키/탭 불필요, 자국 반경 내 진입 시 자동 시작
+  // 2026-08-25 v2: 즉시 흡수 — 1초 hold 제거. 자국에 닿는 순간 그 프레임에 complete.
+  //                 0 이면 instant 모드 (absorbing 상태 자체를 바이패스).
+  //                 양수면 N 초 hold (이전 동작, 필요시 되돌릴 수 있도록 상수만 유지).
+  absorbSeconds: 0,
+  absorbCooldownSeconds: 4.0, // instant 모드에서 흡수 후 다음 흡수까지 대기
   absorbRadius: 2.0, // 픽업 반경 (m) — 기존 하드코딩 1.5 → 2.0 으로 완화
   boostSeconds: 4.0,
   // 2026-08-15 v5: 1.6 → 1.4 — 도망자 너무 빠르면 술래 못 잡음
