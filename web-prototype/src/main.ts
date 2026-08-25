@@ -3574,6 +3574,13 @@ function renderGame(): void {
             // 2026-08-25: 클라 측 cooldown 기록 — 같은 대상 재시도 사전 차단용.
             // 서버가 거절해도 무관 (서버 권위), 짧은 UX 손실 방지.
             clientLastReviveAt.set(targetId, Date.now());
+            // 2026-08-25: 즉시 점수 차감 표시 — 서버 broadcast('score')는
+            // 다음 peers tick(80ms+)에 합류. 살리는 쪽 HUD가 즉시 -3 반영.
+            // syncNetwork (50ms)이 서버 값으로 reconcile하므로 stale은 안전.
+            if (net) {
+              net.score = Math.max(0, net.score - GAME.reviveTrailCost);
+              paintTrailScore();
+            }
             net.sendRevive?.(targetId);
             sound.playAbsorbCancel(); // 살리기 시도 = 약간의 SFX 피드백
           }
