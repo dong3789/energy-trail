@@ -4286,3 +4286,31 @@ input.invalid {
   font-weight: 800;
   color: #2a1a4a;
 }
+
+/* 2026-08-25: 연결 끊김 알림 토스트 */
+.net-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 90;
+  padding: 12px 20px;
+  border-radius: 14px;
+  background: rgba(20, 16, 36, 0.92);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: net-toast-in 0.25s ease-out;
+}
+
+@keyframes net-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
