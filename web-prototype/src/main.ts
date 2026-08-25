@@ -1741,7 +1741,13 @@ function renderGame(): void {
     // 출구 (노란 원)
     minimapCtx.fillStyle = '#ffd97a';
     minimapCtx.beginPath();
-    minimapCtx.arc(w / 2 + exitPos.x * minimapScale, h / 2 + exitPos.z * minimapScale, 4, 0, Math.PI * 2);
+    minimapCtx.arc(
+      w / 2 + exitPos.x * minimapScale,
+      h / 2 + exitPos.z * minimapScale,
+      4,
+      0,
+      Math.PI * 2,
+    );
     minimapCtx.fill();
     for (const bot of bots) {
       if (bot.out) continue;
@@ -2770,8 +2776,12 @@ function renderGame(): void {
   const blockersScratch: THREE.Object3D[] = [];
   const camRaycaster = new THREE.Raycaster();
   const lookRaycaster = new THREE.Raycaster();
-  const preyPointsScratch: Array<{ x: number; z: number; mesh: THREE.Object3D; isPlayer: boolean }> =
-    [];
+  const preyPointsScratch: Array<{
+    x: number;
+    z: number;
+    mesh: THREE.Object3D;
+    isPlayer: boolean;
+  }> = [];
   // 2026-08-15: 카메라 yaw 회전용 임시 객체 (할당 재사용)
   const yawQuatTmp = new THREE.Quaternion();
   const yawAxis = new THREE.Vector3(0, 1, 0);
@@ -3114,7 +3124,9 @@ function renderGame(): void {
       }
       if (taggerAI && smokeLeft <= 0) {
         const locked = chasePrey;
-        const currentPrey = locked ? preyPointsScratch.find((p) => p.mesh === locked.mesh) : undefined;
+        const currentPrey = locked
+          ? preyPointsScratch.find((p) => p.mesh === locked.mesh)
+          : undefined;
         const sticky = pickStickyPoint(
           taggerMesh.position.x,
           taggerMesh.position.z,
@@ -3347,7 +3359,8 @@ function renderGame(): void {
         .padStart(2, '0');
       const timeStr = `${mm}:${ss}`;
       // 색상: green (safe) → yellow (warning) → red (critical) → flashing
-      const state = roundTime < 10 ? 'flash' : roundTime < 30 ? 'critical' : roundTime < 60 ? 'warn' : '';
+      const state =
+        roundTime < 10 ? 'flash' : roundTime < 30 ? 'critical' : roundTime < 60 ? 'warn' : '';
       if (timeStr !== lastTimerText || state !== lastTimerState) {
         lastTimerText = timeStr;
         lastTimerState = state;
