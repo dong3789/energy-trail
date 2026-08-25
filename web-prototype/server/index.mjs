@@ -9,6 +9,19 @@ const CATCH_DIST = 1.65;
 const MAX_PLAYERS = 5;
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 
+// 2026-08-25: 동료 살리기 (Revive) — 기획안 자국-동료살리기-밸런스
+// - 승리용 자국을 깎아서 살리면 밸런스 안 깨진다
+// - 시체 위치가 아닌 가장자리 → 술래 위에 던지지 않게
+const REVIVE_ENABLED = true;
+const REVIVE_TRAIL_COST = 3;
+const REVIVE_NO_LAST_SECONDS = 10.0; // 남은 시간 ≤ 10초면 불가
+const REVIVE_RANGE = 3.5; // 살리는 쪽 → 시체까지 최대 거리
+const REVIVE_INVULNERABLE_SECONDS = 1.0; // 부활 후 무적
+const REVIVE_EDGE_MARGIN = 3.0; // 가장자리 스폰 마진
+const MAP_WIDTH = 42; // config.ts의 MAP.width 와 일치
+const MAP_DEPTH = 42;
+const TAGGER_WIN_OUT_COUNT = 2; // 동시 다운 2명이면 술래 승 (기획안)
+
 // 2026-08-25: 전역 예외 핸들러 — 단일 런타임 에러로 프로세스가 죽으면
 // 활성 매치의 모든 유저가 일제히 끊긴다. 에러를 기록하고 서버를 유지한다.
 process.on('uncaughtException', (err) => {
@@ -18,7 +31,7 @@ process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
 });
 
-/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket }} Player */
+/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number }} Player */
 /** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string }} Room */
 
 /** @type {Map<string, Room>} */
@@ -87,6 +100,7 @@ function placePlayers(room) {
     p.x = pos.x;
     p.z = pos.z;
     p.yaw = 0;
+    p.invulnUntil = 0; // 2026-08-25: 라운드 시작 시 무적 없음
     spawns[p.id] = { x: p.x, z: p.z };
   }
   return spawns;
@@ -110,6 +124,33 @@ function dist(a, b) {
   return Math.hypot(dx, dz);
 }
 
+/** 2026-08-25: 가장자리 스폰 좌표 선택 — 시체가 아닌 가장자리 (살리는 쪽과 같은 변 우선) */
+function pickEdgeSpawn(targetX, targetZ, helperX, helperZ) {
+  const halfW = MAP_WIDTH / 2;
+  const halfD = MAP_DEPTH / 2;
+  const refX = helperX ?? targetX;
+  const refZ = helperZ ?? targetZ;
+  const dLeft = Math.abs(refX - -halfW);
+  const dRight = Math.abs(refX - halfW);
+  const dTop = Math.abs(refZ - -halfD);
+  const dBottom = Math.abs(refZ - halfD);
+  const m = REVIVE_EDGE_MARGIN;
+  const min = Math.min(dLeft, dRight, dTop, dBottom);
+  if (min === dLeft) return { x: -halfW + m, z: clamp(refZ, -halfD + m, halfD - m) };
+  if (min === dRight) return { x: halfW - m, z: clamp(refZ, -halfD + m, halfD - m) };
+  if (min === dTop) return { x: clamp(refX, -halfW + m, halfW - m), z: -halfD + m };
+  return { x: clamp(refX, -halfW + m, halfW - m), z: halfD - m };
+}
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/** 2026-08-25: 술래 승 — 동시 다운 카운트 */
+function taggerWinsByOutCount(downCount) {
+  return downCount >= TAGGER_WIN_OUT_COUNT;
+}
+
 function resetRoomToLobby(room) {
   room.phase = 'lobby';
   room.score = 0;
@@ -118,6 +159,7 @@ function resetRoomToLobby(room) {
   for (const p of room.players.values()) {
     p.out = false;
     p.role = '';
+    p.invulnUntil = 0; // 2026-08-25: 다음 라운드 위해 무적 초기화
   }
   broadcast(room, roomPayload(room));
 }
@@ -146,19 +188,29 @@ function tickPlaying(room) {
     return;
   }
   const taggers = [...room.players.values()].filter((p) => p.role === 'tagger' && !p.out);
-  const runners = [...room.players.values()].filter((p) => p.role === 'runner' && !p.out);
+  const runners = [...room.players.values()].filter((p) => p.role === 'runner');
   // 2026-08-25: 술래가 매치 중 이탈하면 라운드가 끝나지 않고 타이머 만료 뒤
   // "나간 술래 승리"로 처리되던 문제 — 술래가 없으면 즉시 도망자 승으로 종료
   if (taggers.length === 0) {
     endRoom(room, 'runner', '술래가 방을 나갔습니다');
     return;
   }
-  if (runners.length === 0 && taggers.length > 0) {
+  const aliveRunners = runners.filter((p) => !p.out);
+  if (aliveRunners.length === 0 && taggers.length > 0) {
     endRoom(room, 'tagger', '도망자를 모두 잡았습니다');
     return;
   }
+  // 2026-08-25: 동시 다운 승리 — 살리기 도입으로 "한 명이라도 잡히면 끝"이 깨질 수 있어
+  // TAGGER_WIN_OUT_COUNT(2) 명 동시 OUT면 즉시 술래 승
+  const downCount = runners.filter((p) => p.out).length;
+  if (taggerWinsByOutCount(downCount)) {
+    endRoom(room, 'tagger', `도망자 ${downCount}명 동시 다운`);
+    return;
+  }
   for (const tag of taggers) {
-    for (const run of runners) {
+    for (const run of aliveRunners) {
+      // 2026-08-25: 부활 무적 (reviveInvulnerabilitySeconds) 적용
+      if (run.invulnUntil > now) continue;
       if (dist(tag, run) <= CATCH_DIST) {
         run.out = true;
         broadcast(room, { t: 'caught', id: run.id });
@@ -172,6 +224,7 @@ function tickPlaying(room) {
   }
   // 2026-08-25: 변경 감지 스킵 — 위치/점수/상태 변화가 없으면 peers 전송 생략 (대역폭·CPU 절감).
   // left는 초 단위로 올림해 1초에 한 번만 갱신 (클라이언트는 left를 사용하지 않음).
+  // invulnUntil(epoch ms)을 peers에 포함해 클라이언트가 무적 상태 표시/판정에 사용.
   const payload = JSON.stringify({
     t: 'peers',
     list: [...room.players.values()].map((p) => ({
@@ -181,6 +234,7 @@ function tickPlaying(room) {
       yaw: p.yaw,
       out: p.out,
       role: p.role,
+      invulnUntil: p.invulnUntil || 0,
     })),
     score: room.score,
     left: Math.ceil(left),
@@ -325,6 +379,7 @@ wss.on('connection', (ws) => {
       for (const p of room.players.values()) {
         p.role = room.roles[p.id];
         p.out = false;
+        p.invulnUntil = 0;
       }
       room.phase = 'playing';
       room.startedAt = Date.now();
@@ -359,6 +414,58 @@ wss.on('connection', (ws) => {
         target.out = true;
         broadcast(room, { t: 'caught', id: target.id });
       }
+      return;
+    }
+    // 2026-08-25: 동료 살리기 — 자국 3개를 써서 OUT된 사람 도망자를 가장자리로 부활
+    if (t === 'revive' && REVIVE_ENABLED && room.phase === 'playing' && player.role === 'runner' && !player.out) {
+      const target = room.players.get(String(msg.id || ''));
+      // 가드: 대상은 OUT된 사람 도망자만 (AI는 부활 안 함)
+      if (!target) {
+        send(ws, { t: 'reviveDenied', reason: 'no_target' });
+        return;
+      }
+      if (target.role !== 'runner' || !target.out) {
+        send(ws, { t: 'reviveDenied', reason: 'target_not_out' });
+        return;
+      }
+      // AI 구별: 이름이 'AI-'로 시작하면 봇 (config.ts RunnerAIStub 패턴과 동일)
+      if (target.id.startsWith('ai_') || target.name.startsWith('AI')) {
+        send(ws, { t: 'reviveDenied', reason: 'target_is_ai' });
+        return;
+      }
+      // 거리 가드: 살리는 쪽 → 시체(현재 위치)까지 REVIVE_RANGE 이내
+      if (dist(player, target) > REVIVE_RANGE) {
+        send(ws, { t: 'reviveDenied', reason: 'target_too_far' });
+        return;
+      }
+      // 점수 가드
+      if (room.score < REVIVE_TRAIL_COST) {
+        send(ws, { t: 'reviveDenied', reason: 'not_enough_trail' });
+        return;
+      }
+      // 시간 가드: 남은 시간 > REVIVE_NO_LAST_SECONDS
+      const now = Date.now();
+      const left = ROUND_SECONDS - (now - room.startedAt) / 1000;
+      if (left <= REVIVE_NO_LAST_SECONDS) {
+        send(ws, { t: 'reviveDenied', reason: 'too_late' });
+        return;
+      }
+      // 모든 가드 통과 — 부활 실행
+      room.score -= REVIVE_TRAIL_COST;
+      const edge = pickEdgeSpawn(target.x, target.z, player.x, player.z);
+      target.x = edge.x;
+      target.z = edge.z;
+      target.yaw = 0;
+      target.out = false;
+      target.invulnUntil = now + REVIVE_INVULNERABLE_SECONDS * 1000;
+      broadcast(room, { t: 'score', n: room.score });
+      broadcast(room, {
+        t: 'revived',
+        id: target.id,
+        x: target.x,
+        z: target.z,
+        invulnUntil: target.invulnUntil,
+      });
       return;
     }
   });

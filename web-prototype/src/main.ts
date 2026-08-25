@@ -45,7 +45,7 @@ import {
 import { moveCircle } from './lib/collision';
 import { contactsInRange, netCatchRadius, pickStickyPoint, withinDistance } from './lib/chase';
 import { matchSpawns } from './lib/spawn-layout';
-import { NetClient, wsUrlFromLocation } from './lib/net';
+import { NetClient, type NetPeer, wsUrlFromLocation } from './lib/net';
 import { judgeTrailRound } from './lib/round-rules';
 import {
   assignRoles,
@@ -2492,6 +2492,82 @@ function renderGame(): void {
     const dz = selfMesh.position.z - taggerMesh.position.z;
     return Math.hypot(dx, dz);
   }
+  // 2026-08-25: 동료 살리기 (도망자만) — R 키 또는 모바일 버튼 홀드 (1.5초)
+  // - 흡수(즉시)와 달리 명시적 홀드 → 자국 자동수집과 충돌 없음
+  // - 가장 가까운 OUT된 사람 도망자를 자동 타겟 (사용자가 R 한번 누르면 가장 가까운 OUT 처리)
+  // - 홀드 중 거리/대상 OUT 변경 → 취소, 홀드 중 R 떼면 취소 (서버 요청 X)
+  // - 1.5초 완료 시에만 서버에 sendRevive (서버가 score/시간/대상 검증)
+  // - 솔로 모드(혼자 시작)에는 GAME.reviveEnabled로 자동 비활성 — canRevive에서 disabled 반환
+  // - AI는 살리기 불가 (서버 가드)
+  let reviveBtn: HTMLButtonElement | null = null;
+  let reviveBarFill: HTMLElement | null = null;
+  let reviveStatus: HTMLElement | null = null;
+  let reviveHoldProgress = 0; // 0~1
+  let reviveHoldTarget: NetPeer | null = null;
+  let reviveHoldActive = false;
+  // 가장 가까운 OUT된 사람 도망자 찾기 (살리는 쪽 기준)
+  function pickReviveTarget(): NetPeer | null {
+    let best: NetPeer | null = null;
+    let bestDist = Infinity;
+    for (const p of net?.peers.values() ?? []) {
+      // AI는 부활 대상 아님 (서버와 동일한 가드 — 현재 서버에 봇은 없지만 미래 대비)
+      if (p.id.startsWith('ai_')) continue;
+      if (p.role !== 'runner' || !p.out) continue;
+      const dx = p.x - selfMesh.position.x;
+      const dz = p.z - selfMesh.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d <= GAME.reviveRange && d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+  const reviveKeyDownHandler = (e: Event): void => {
+    const ke = e as KeyboardEvent;
+    if (ke.code !== 'KeyR') return;
+    if (isTagger || game.out) return;
+    if (roundState !== 'playing') return;
+    if (!GAME.reviveEnabled) return;
+    if (reviveHoldActive) return;
+    if (ke.repeat) return;
+    // 자국 부족 / 마지막 10초 / 비활성화는 UI에서 표시 (canRevive 사용)
+    const target = pickReviveTarget();
+    if (!target) {
+      // 가까운 OUT된 동료 없음 → 살리기 불가 (UI 피드백은 keyup 시점에 표시)
+      reviveHoldActive = false;
+      reviveHoldTarget = null;
+      return;
+    }
+    reviveHoldActive = true;
+    reviveHoldTarget = target;
+    reviveHoldProgress = 0;
+    if (reviveBtn && reviveBarFill) {
+      reviveBtn.classList.add('holding');
+      reviveBarFill.style.width = '0%';
+    }
+  };
+  const reviveKeyUpHandler = (e: Event): void => {
+    const ke = e as KeyboardEvent;
+    if (ke.code !== 'KeyR') return;
+    if (!reviveHoldActive) return;
+    if (reviveHoldProgress < 1) {
+      // 1.5초 채우지 못하고 떼면 취소 (서버 요청 X)
+      reviveHoldActive = false;
+      reviveHoldTarget = null;
+      reviveHoldProgress = 0;
+      if (reviveBtn && reviveBarFill) {
+        reviveBtn.classList.remove('holding');
+        reviveBarFill.style.width = '0%';
+      }
+      return;
+    }
+    // 1.5초 완료 후 R 떼면 발사 — 단, 홀드 중에 누른 시점에 이미 sendRevive를 했다면 중복 방지
+    // (여기서 별도 처리할 필요 없음 — 매 프레임 100% 도달 시점에 이미 발사됨)
+  };
+  addTrackedListener(canvasHost, 'keydown', reviveKeyDownHandler);
+  addTrackedListener(canvasHost, 'keyup', reviveKeyUpHandler);
+
   // F 키로 얼림 발동 (도망자만) — 2026-08-09 v5: 캔버스에 등록 (포커스 안정)
   // 2026-08-16: addTrackedListener 사용 — teardownGame에서 자동 해제
   addTrackedListener(canvasHost, 'keydown', iceKeyHandler);
@@ -2655,6 +2731,55 @@ function renderGame(): void {
     wrap.appendChild(iceWrap);
   }
 
+  // 2026-08-25: 살리기 버튼 (도망자만) — R 키와 동일한 홀드 인터페이스 (1.5초)
+  // - 모바일은 키가 없으니 이 버튼을 누르고 있기만 하면 됨
+  // - progress 바는 .revive-bar-fill width 0% → 100%
+  if (!isTagger && GAME.reviveEnabled) {
+    const reviveWrap = document.createElement('div');
+    reviveWrap.className = 'revive-wrap';
+    reviveBtn = document.createElement('button');
+    reviveBtn.type = 'button';
+    reviveBtn.className = 'revive-btn';
+    reviveBtn.innerHTML = `<span class="revive-btn-label">살리기</span><span class="revive-btn-hint">R</span><div class="revive-bar"><div class="revive-bar-fill"></div></div>`;
+    reviveBarFill = reviveBtn.querySelector<HTMLElement>('.revive-bar-fill');
+    // 모바일/마우스: pointerdown/up으로 키와 동일 효과
+    const startHold = (): void => {
+      if (game.out || !GAME.reviveEnabled) return;
+      if (reviveHoldActive) return;
+      const target = pickReviveTarget();
+      if (!target) return;
+      reviveHoldActive = true;
+      reviveHoldTarget = target;
+      reviveHoldProgress = 0;
+      reviveBtn?.classList.add('holding');
+      if (reviveBarFill) reviveBarFill.style.width = '0%';
+    };
+    const endHold = (): void => {
+      if (!reviveHoldActive) return;
+      if (reviveHoldProgress < 1) {
+        // 1.5초 미만이면 취소 (서버 요청 X)
+        reviveHoldActive = false;
+        reviveHoldTarget = null;
+        reviveHoldProgress = 0;
+        reviveBtn?.classList.remove('holding');
+        if (reviveBarFill) reviveBarFill.style.width = '0%';
+      }
+    };
+    reviveBtn.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      startHold();
+    });
+    reviveBtn.addEventListener('pointerup', () => endHold());
+    reviveBtn.addEventListener('pointercancel', () => endHold());
+    reviveBtn.addEventListener('pointerleave', () => endHold());
+    reviveWrap.appendChild(reviveBtn);
+    reviveStatus = document.createElement('div');
+    reviveStatus.className = 'revive-status';
+    reviveStatus.textContent = '동료 가까이서 홀드';
+    reviveWrap.appendChild(reviveStatus);
+    wrap.appendChild(reviveWrap);
+  }
+
   const itemSlot = document.createElement('button');
   itemSlot.type = 'button';
   itemSlot.className = 'item-slot';
@@ -2772,6 +2897,62 @@ function renderGame(): void {
         bot.material.opacity = 0.3;
         bot.mesh.scale.set(0.6, 0.4, 0.6);
       }
+    };
+    // 2026-08-25: 부활됨 — 본인 또는 다른 peer의 위치를 텔레포트하고 무적 1초 적용
+    net.onRevived = (p) => {
+      const invulnSec = Math.max(0, (p.invulnUntil - Date.now()) / 1000);
+      if (p.id === net?.id) {
+        // 본인 부활 — out overlay 끄고 selfMesh 텔레포트 + 흡수 무적 활성화
+        game.out = false;
+        game.outReason = '';
+        if (game.outOverlay) game.outOverlay.classList.remove('show');
+        if (game.outFlash) game.outFlash.classList.remove('active');
+        selfMesh.position.set(p.x, PLAYER.height / 2, p.z);
+        if (absorb) {
+          absorb.reset();
+          absorb.consumeInvulnerability(); // 1초 무적 (AbsorbSystem은 1회용)
+        }
+        // dust 버스트로 부활 표시
+        if (dust) dust.burst(selfMesh.position, 18, 1.0, 1.8, 2.2, 0.7);
+        if (reviveStatus) reviveStatus.textContent = `부활! ${invulnSec.toFixed(1)}초 무적`;
+        trackTimeout(
+          () => {
+            if (reviveStatus) reviveStatus.textContent = '동료 가까이서 홀드';
+          },
+          Math.max(500, invulnSec * 1000),
+        );
+      } else {
+        // 다른 peer — 봇이면 위치/opacity/scale 복구, 메시도 보이게
+        const bot = bots.find((b) => b.id === p.id);
+        if (bot && bot.out) {
+          bot.out = false;
+          bot.material.transparent = false;
+          bot.material.opacity = 1.0;
+          bot.mesh.scale.set(1, 1, 1);
+          bot.mesh.position.set(p.x, PLAYER.height / 2, p.z);
+        }
+      }
+    };
+    // 2026-08-25: 살리기 거부 — UI 피드백
+    net.onReviveDenied = (reason) => {
+      const msg =
+        reason === 'not_enough_trail'
+          ? '자국 부족 (3개 필요)'
+          : reason === 'too_late'
+            ? '마지막 10초엔 불가'
+            : reason === 'target_too_far'
+              ? '동료가 너무 멀다'
+              : reason === 'target_is_ai'
+                ? 'AI는 살릴 수 없다'
+                : reason === 'target_not_out'
+                  ? '대상이 OUT가 아님'
+                  : reason === 'disabled'
+                    ? '살리기 비활성'
+                    : '살리기 실패';
+      if (reviveStatus) reviveStatus.textContent = msg;
+      trackTimeout(() => {
+        if (reviveStatus && !reviveHoldActive) reviveStatus.textContent = '동료 가까이서 홀드';
+      }, 1800);
     };
     net.onEnd = (winner, reason) => {
       showResult(winner, reason);
@@ -3056,6 +3237,41 @@ function renderGame(): void {
         // 가속 종료 시 boost speed 해제
         if (absorb.getBoostRemaining() <= 0) {
           player.setBoostSpeedMultiplier(1.0);
+        }
+      }
+
+      // 2026-08-25: 살리기 홀드 진행 — R/버튼 누르고 있는 동안 progress 증가
+      // 거리/대상 out 변경 시 즉시 취소. 1.0 도달 시 1회만 sendRevive (서버가 권한 검증)
+      if (reviveHoldActive && reviveHoldTarget && net) {
+        const cur = net.peers.get(reviveHoldTarget.id);
+        const stillOut = cur && cur.role === 'runner' && cur.out;
+        const dx = (cur?.x ?? reviveHoldTarget.x) - selfMesh.position.x;
+        const dz = (cur?.z ?? reviveHoldTarget.z) - selfMesh.position.z;
+        const dist = Math.hypot(dx, dz);
+        if (!stillOut || dist > GAME.reviveRange) {
+          // 타겟 변경 / 거리 초과 → 취소
+          reviveHoldActive = false;
+          reviveHoldTarget = null;
+          reviveHoldProgress = 0;
+          if (reviveBtn) reviveBtn.classList.remove('holding');
+          if (reviveBarFill) reviveBarFill.style.width = '0%';
+          if (reviveStatus) reviveStatus.textContent = '동료 가까이서 홀드';
+        } else {
+          reviveHoldProgress += dt / GAME.reviveHoldSeconds;
+          if (reviveBarFill)
+            reviveBarFill.style.width = `${Math.min(100, reviveHoldProgress * 100)}%`;
+          if (reviveHoldProgress >= 1) {
+            // 1.5초 채움 — 서버에 1회만 요청
+            reviveHoldProgress = 1;
+            const targetId = reviveHoldTarget.id;
+            reviveHoldActive = false;
+            reviveHoldTarget = null;
+            if (reviveBtn) reviveBtn.classList.remove('holding');
+            if (reviveBarFill) reviveBarFill.style.width = '0%';
+            if (reviveStatus) reviveStatus.textContent = '살리는 중...';
+            net.sendRevive?.(targetId);
+            sound.playAbsorbCancel(); // 살리기 시도 = 약간의 SFX 피드백
+          }
         }
       }
 
