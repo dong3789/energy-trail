@@ -27,6 +27,7 @@ export class TaggerAI {
   private frozen = false; // 2026-08-09 v4: 얼림 — true면 이동 스킵
   private chaseEnabled = true;
   private extraSpeedMul = 1.0;
+  private inverted = false; // 2026-08-25: 반전 아이템 — 조종 방향 반전 (혼란)
 
   private heading = new THREE.Vector3(1, 0, 0);
   private turnTimer = 0;
@@ -72,6 +73,11 @@ export class TaggerAI {
     this.extraSpeedMul = Math.max(0.2, mul);
   }
 
+  /** 2026-08-25: 반전 아이템 — true면 계산된 이동 방향을 반대로 뒤집는다 (경계 보정 후 적용). */
+  setInverted(value: boolean): void {
+    this.inverted = value;
+  }
+
   update(dt: number): void {
     if (this.frozen) return;
 
@@ -100,6 +106,9 @@ export class TaggerAI {
     if (Math.abs(px) > this.mapHalfWidth - margin) this.heading.x = px > 0 ? -1 : 1;
     if (Math.abs(pz) > this.mapHalfDepth - margin) this.heading.z = pz > 0 ? -1 : 1;
     this.heading.normalize();
+
+    // 2026-08-25: 반전 — 경계 보정까지 끝난 최종 방향을 뒤집어 완전히 반대로 걷게 한다
+    if (this.inverted) this.heading.multiplyScalar(-1);
 
     let speed =
       GAME.baseSpeed *
