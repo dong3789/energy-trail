@@ -3522,7 +3522,11 @@ function renderGame(): void {
       // - 흡수 중 아닐 때 inTrail 이면 AbsorbSystem.update() 가 내부에서 tryStart() 호출
       // - OUT된 도망자는 흡수 차단 — 자국에 닿아도 score가 오르면 다른 동료가
       //   잡힌 동안 혼자 승리 가능. 살리기 broadcast 도착 전까지 out 유지.
-      if (absorb && !isTagger && !game.out) {
+      // 2026-08-25: 카운트다운 중 흡수 차단 — roundState === 'playing'일 때만.
+      // 카운트다운 중 흡수 시 즉시 score +1 broadcast → 서버가 TRAIL_GOAL 도달하면
+      // 게임 시작 전 endRoom race. 또한 카운트다운 중에는 자국이 다른 사람 것도
+      // 합쳐져서 자기 표시 점수가 일관성 깨질 수 있음.
+      if (absorb && !isTagger && !game.out && roundState === 'playing') {
         const query = trails.queryNearest(selfMesh.position, GAME.absorbRadius);
         if (query.hit && query.position) {
           absorb.setLastTrailPosition(query.position.x, query.position.z);
