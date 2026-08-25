@@ -3223,9 +3223,11 @@ function renderGame(): void {
                 ? 'AI는 살릴 수 없다'
                 : reason === 'target_not_out'
                   ? '대상이 OUT가 아님'
-                  : reason === 'disabled'
-                    ? '살리기 비활성'
-                    : '살리기 실패';
+                  : reason === 'cooldown'
+                    ? '같은 동료는 8초 후'
+                    : reason === 'disabled'
+                      ? '살리기 비활성'
+                      : '살리기 실패';
       if (reviveStatus) reviveStatus.textContent = msg;
       trackTimeout(() => {
         if (reviveStatus && !reviveHoldActive) reviveStatus.textContent = '동료 가까이서 홀드';
