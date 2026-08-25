@@ -9,6 +9,15 @@ const CATCH_DIST = 1.65;
 const MAX_PLAYERS = 5;
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 
+// 2026-08-25: 전역 예외 핸들러 — 단일 런타임 에러로 프로세스가 죽으면
+// 활성 매치의 모든 유저가 일제히 끊긴다. 에러를 기록하고 서버를 유지한다.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err);
+});
+
 /** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket }} Player */
 /** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string }} Room */
 
@@ -50,7 +59,12 @@ function genCode() {
     const c = String(1000 + Math.floor(Math.random() * 9000));
     if (!rooms.has(c)) return c;
   }
-  return String(Date.now() % 9000).padStart(4, '0');
+  // 2026-08-25: 기존 fallback(Date.now() % 9000)은 진행 중인 방 코드와 겹쳐
+  // rooms.set이 그 방을 덮어써 유저들이 튕겼다. 미사용 코드를 전수 탐색해 충돌을 원천 차단.
+  for (let c = 1000; c < 10000; c++) {
+    if (!rooms.has(String(c))) return String(c);
+  }
+  return '';
 }
 
 function genId() {
@@ -252,6 +266,10 @@ wss.on('connection', (ws) => {
     if (t === 'create') {
       if (slot.room) return;
       const code = genCode();
+      if (!code) {
+        send(ws, { t: 'err', msg: '서버가 가득 찼어요. 잠시 후 다시 시도해 주세요.' });
+        return;
+      }
       /** @type {Room} */
       const room = {
         code,
