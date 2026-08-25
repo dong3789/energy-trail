@@ -1736,6 +1736,22 @@ function renderGame(): void {
     kind: 'ai' | 'remote';
   };
   const bots: BotAgent[] = [];
+  // 2026-08-25: 봇 GPU 자원 정리 — 매치 재시작마다 CapsuleGeometry/Material이
+  // 새로 생성되어 누적되므로 teardownGame에서 명시 dispose. 봇 정의를
+  // game.disposers에 등록해 일괄 해제 흐름에 합류.
+  game.disposers.push(() => {
+    for (const b of bots) {
+      // geometry는 메시와 함께 만들어졌으므로 해제
+      b.mesh.geometry?.dispose();
+      // 머티리얼은 단일 또는 배열 가능
+      const m = b.mesh.material;
+      if (Array.isArray(m)) m.forEach((mm) => mm.dispose());
+      else m?.dispose();
+      // AI 인스턴스도 명시적으로 끊어주기 (있을 때만)
+      b.taggerAI = null;
+      b.runnerAI = null;
+    }
+  });
 
   function drawMinimap(): void {
     const w = minimapCanvas.width;
