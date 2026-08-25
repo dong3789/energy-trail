@@ -91,6 +91,9 @@ function clamp(v: number, lo: number, hi: number): number {
  * - downCount ≥ taggerWinOutCount 면 술래 승
  * - 기존 judgeTrailRound와 별개지만 합쳐 사용 가능
  */
-export function taggerWinsByOutCount(downCount: number, winCount: number = GAME.taggerWinOutCount as number): boolean {
+export function taggerWinsByOutCount(
+  downCount: number,
+  winCount: number = GAME.taggerWinOutCount as number,
+): boolean {
   return downCount >= winCount;
 }
