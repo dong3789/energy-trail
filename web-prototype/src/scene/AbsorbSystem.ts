@@ -26,6 +26,7 @@ export class AbsorbSystem {
   private cooldown = 0; // 남은 쿨다운 (초)
   private boostRemaining = 0; // 가속 남은 시간 (초)
   private invulnerable = false; // 1회 무적
+  private invulnerableUntilMs = 0; // 2026-08-25: 시간 기반 무적 (epoch ms, 부활 1초 등)
   private strengthConsumed = 1.0; // 마지막 흡수 강도 (0~1)
   private lastTrailWorldPos: { x: number; z: number } | null = null;
 
@@ -83,6 +84,11 @@ export class AbsorbSystem {
 
     // instant 모드: 자국 위 + 가능 상태면 같은 프레임에 complete
     if (this.instant) {
+      // 2026-08-25: 시간 기반 무적 (부활 등) 만료 체크
+      if (this.invulnerableUntilMs > 0 && this.invulnerableUntilMs <= Date.now()) {
+        this.invulnerableUntilMs = 0;
+        this.invulnerable = false;
+      }
       if (inTrail && !frozen && this.cooldown <= 0 && this.boostRemaining <= 0) {
         this.tryStart();
         this.absorbing = false;
@@ -170,6 +176,31 @@ export class AbsorbSystem {
     return false;
   }
 
+  /**
+   * 2026-08-25: 시간 기반 무적 (부활용) — peer.invulnUntil(epoch ms)을 그대로 전달
+   * - 흡수 직후 즉시 1회 무적(consumeInvulnerability)과 별개로 "1초 동안 무적" 보장
+   * - update()에서 invulnUntilMs > now 면 무적 유지, 만료 시 자동 해제
+   */
+  setInvulnerableUntilMs(epochMs: number): void {
+    this.invulnerableUntilMs = epochMs;
+    if (epochMs > Date.now()) {
+      this.invulnerable = true;
+    } else {
+      this.invulnerable = false;
+      this.invulnerableUntilMs = 0;
+    }
+  }
+
+  /** 현재 무적이 유효한지 (1회용 또는 시간 기반) */
+  isCurrentlyInvulnerable(): boolean {
+    if (this.invulnerable) return true;
+    if (this.invulnerableUntilMs > Date.now()) {
+      this.invulnerable = true;
+      return true;
+    }
+    return false;
+  }
+
   /** 리셋 (OUT 또는 라운드 종료) */
   reset(): void {
     this.absorbing = false;
@@ -177,6 +208,7 @@ export class AbsorbSystem {
     this.cooldown = 0;
     this.boostRemaining = 0;
     this.invulnerable = false;
+    this.invulnerableUntilMs = 0; // 2026-08-25: 시간 기반 무적도 리셋
     this.lastTrailWorldPos = null;
   }
 }

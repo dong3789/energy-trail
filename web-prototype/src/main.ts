@@ -2523,6 +2523,47 @@ function renderGame(): void {
     }
     return best;
   }
+  // 2026-08-25: 살리기 시도 사유 — UI에 짧게 표시하고1.5초 후 자동 해제
+  function flashReviveDeny(msg: string): void {
+    if (!reviveStatus) return;
+    reviveStatus.textContent = msg;
+    trackTimeout(() => {
+      if (reviveStatus && !reviveHoldActive) reviveStatus.textContent = '동료 가까이서 홀드';
+    }, 1500);
+  }
+  // 2026-08-25: 살리기 시도 즉시 가드 — 홀드 시작 전에 사유 표시
+  // - 흡수와 달리 명시적 홀드이지만 사용자가 "왜 안 되는지" 모를 수 있어 사전 사유 노출
+  function explainReviveDenyIfApplicable(): boolean {
+    // 비활성(솔로 모드 등)
+    if (!GAME.reviveEnabled) {
+      flashReviveDeny('살리기 비활성');
+      return true;
+    }
+    // 자국 부족
+    if (net && net.score < GAME.reviveTrailCost) {
+      flashReviveDeny(`자국 부족 (${GAME.reviveTrailCost}개 필요)`);
+      return true;
+    }
+    // 마지막 10초
+    // - roundStats.startedAt (performance.now() 기준)을 Date.now()로 변환해 left 추정
+    // - startedAt=0 이면 아직 시작 안 됨 (라운드 시작 전)
+    if (roundStats.startedAt > 0) {
+      const perfNow = performance.now();
+      const startedAtDateMs = Date.now() - (perfNow - roundStats.startedAt);
+      const elapsed = (Date.now() - startedAtDateMs) / 1000;
+      const left = GAME.roundSeconds - elapsed;
+      if (left <= GAME.reviveNoLastSeconds) {
+        flashReviveDeny('마지막 10초엔 불가');
+        return true;
+      }
+    }
+    // 가까운 OUT 동료 없음
+    if (!pickReviveTarget()) {
+      flashReviveDeny('가까운 OUT 동료 없음');
+      return true;
+    }
+    return false;
+  }
   const reviveKeyDownHandler = (e: Event): void => {
     const ke = e as KeyboardEvent;
     if (ke.code !== 'KeyR') return;
@@ -2531,16 +2572,9 @@ function renderGame(): void {
     if (!GAME.reviveEnabled) return;
     if (reviveHoldActive) return;
     if (ke.repeat) return;
-    // 자국 부족 / 마지막 10초 / 비활성화는 UI에서 표시 (canRevive 사용)
-    const target = pickReviveTarget();
-    if (!target) {
-      // 가까운 OUT된 동료 없음 → 살리기 불가 (UI 피드백은 keyup 시점에 표시)
-      reviveHoldActive = false;
-      reviveHoldTarget = null;
-      return;
-    }
+    if (explainReviveDenyIfApplicable()) return;
     reviveHoldActive = true;
-    reviveHoldTarget = target;
+    reviveHoldTarget = pickReviveTarget();
     reviveHoldProgress = 0;
     if (reviveBtn && reviveBarFill) {
       reviveBtn.classList.add('holding');
@@ -2902,17 +2936,20 @@ function renderGame(): void {
     net.onRevived = (p) => {
       const invulnSec = Math.max(0, (p.invulnUntil - Date.now()) / 1000);
       if (p.id === net?.id) {
-        // 본인 부활 — out overlay 끄고 selfMesh 텔레포트 + 흡수 무적 활성화
+        // 본인 부활 — out overlay 끄고 selfMesh 텔레포트 + 시간 기반 무적 1초
         game.out = false;
         game.outReason = '';
         if (game.outOverlay) game.outOverlay.classList.remove('show');
         if (game.outFlash) game.outFlash.classList.remove('active');
         selfMesh.position.set(p.x, PLAYER.height / 2, p.z);
         if (absorb) {
+          // 2026-08-25: 시간 기반 무적 (peer.invulnUntil epoch ms) — 1초 동안 잡혀도 무효화
           absorb.reset();
-          absorb.consumeInvulnerability(); // 1초 무적 (AbsorbSystem은 1회용)
+          absorb.setInvulnerableUntilMs(p.invulnUntil);
         }
-        // dust 버스트로 부활 표시
+        // 2026-08-25: 부활 직후 서버에 즉시 위치 전송 — 다른 peer가 텔레포트된 위치를 즉시 봄
+        // (다음 syncNetwork 50ms까지 기다리지 않음)
+        syncNetwork();
         if (dust) dust.burst(selfMesh.position, 18, 1.0, 1.8, 2.2, 0.7);
         if (reviveStatus) reviveStatus.textContent = `부활! ${invulnSec.toFixed(1)}초 무적`;
         trackTimeout(
@@ -3422,7 +3459,9 @@ function renderGame(): void {
           }
         }
         if (playerHit) {
-          if (absorb && absorb.isInvulnerable()) {
+          // 2026-08-25: isInvulnerable는 1회용 boolean만 봄. 부활 후 1초 무적은
+          // setInvulnerableUntilMs로 시간 기반이므로 isCurrentlyInvulnerable로 확인.
+          if (absorb && absorb.isCurrentlyInvulnerable()) {
             absorb.consumeInvulnerability();
             triggerShake(0.3);
             sound.playBoost();
