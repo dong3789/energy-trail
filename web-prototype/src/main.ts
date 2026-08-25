@@ -1472,6 +1472,11 @@ function renderGame(): void {
   const roundTimerEl = statusHud.querySelector<HTMLElement>('#round-timer');
   const roundScoreEl = statusHud.querySelector<HTMLElement>('#round-score');
   const debugStatus = statusHud.querySelector<HTMLElement>('#status-debug');
+  // 2026-08-25: HUD 갱신 스로틀 — 값이 바뀐 프레임에만 DOM 기록 (매 프레임 textContent/classList 재계산 방지)
+  let lastTimerText = '';
+  let lastTimerState = '';
+  let lastTrailCount = -1;
+  let lastDebugStatus = '';
 
   // 2026-08-15 v4: 일시정지 메뉴 (best practice: 사용자 자유/통제)
   // - ESC 키 또는 ⚙ 버튼으로 진입
@@ -3327,7 +3332,11 @@ function renderGame(): void {
 
     // 자국 개수 HUD
     if (game.statusTimer) {
-      game.statusTimer.textContent = String(trails.getActiveCount());
+      const trailCount = trails.getActiveCount();
+      if (trailCount !== lastTrailCount) {
+        lastTrailCount = trailCount;
+        game.statusTimer.textContent = String(trailCount);
+      }
     }
 
     // 2026-08-15 v4: 라운드 타이머 HUD — 큰 글씨 + 색상 그라데이션 (best practice: 시각적 계층)
@@ -3337,15 +3346,14 @@ function renderGame(): void {
         .toString()
         .padStart(2, '0');
       const timeStr = `${mm}:${ss}`;
-      roundTimerEl.textContent = timeStr;
       // 색상: green (safe) → yellow (warning) → red (critical) → flashing
-      roundTimerEl.classList.remove('warn', 'critical', 'flash');
-      if (roundTime < 10) {
-        roundTimerEl.classList.add('flash');
-      } else if (roundTime < 30) {
-        roundTimerEl.classList.add('critical');
-      } else if (roundTime < 60) {
-        roundTimerEl.classList.add('warn');
+      const state = roundTime < 10 ? 'flash' : roundTime < 30 ? 'critical' : roundTime < 60 ? 'warn' : '';
+      if (timeStr !== lastTimerText || state !== lastTimerState) {
+        lastTimerText = timeStr;
+        lastTimerState = state;
+        roundTimerEl.textContent = timeStr;
+        roundTimerEl.classList.remove('warn', 'critical', 'flash');
+        if (state) roundTimerEl.classList.add(state);
       }
     }
     // v4: speedStatus는 dpad 아래 작은 게이지로 변경 (기존 코드와 호환 위해 유지)
@@ -3448,7 +3456,7 @@ function renderGame(): void {
       }
       shotChargeReady = canFire;
     }
-    if (debugStatus) {
+    if (debugStatus && debug.style.display !== 'none') {
       // v5 디버그: 자기 위치 + 입력 상태 (캔버스에 키가 들어오는지 즉시 확인)
       const inp = player.getDebugInput();
       const px = selfMesh.position.x;
@@ -3457,7 +3465,11 @@ function renderGame(): void {
         (inp.forward > 0 ? '↑' : inp.forward < 0 ? '↓' : '·') +
         (inp.right > 0 ? '→' : inp.right < 0 ? '←' : '·');
       const frozenTag = player.isFrozen() ? ' [얼림]' : '';
-      debugStatus.textContent = `(${px.toFixed(1)}, ${pz.toFixed(1)}) 입력 ${dirArrow}${frozenTag}`;
+      const debugText = `(${px.toFixed(1)}, ${pz.toFixed(1)}) 입력 ${dirArrow}${frozenTag}`;
+      if (debugText !== lastDebugStatus) {
+        lastDebugStatus = debugText;
+        debugStatus.textContent = debugText;
+      }
     }
 
     // 얼림 버튼 상태 업데이트
