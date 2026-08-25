@@ -393,6 +393,10 @@ wss.on('connection', (ws) => {
         spawns,
         roundSeconds: ROUND_SECONDS,
         trailGoal: TRAIL_GOAL,
+        // 2026-08-25: 서버 epoch ms — 클라 카운트다운/left가 서버 시간 기준으로
+        // 동작하도록 기준점 제공. 네트워크 지연으로 클라 Date.now()와 차이 날 수 있어
+        // 서버가 권위 있는 시작 시각을 통보.
+        roundStartedAt: room.startedAt,
       });
       return;
     }

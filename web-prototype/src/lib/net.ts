@@ -46,6 +46,8 @@ export class NetClient {
   roles: Record<string, NetRole> = {};
   spawns: Record<string, { x: number; z: number }> = {};
   score = 0;
+  /** 2026-08-25: 서버 roundStartedAt (epoch ms) — start 메시지에서 수신. */
+  roundStartedAt = 0;
   connected = false;
   lastError = '';
   private pending: Array<(ok: boolean) => void> = [];
@@ -215,6 +217,7 @@ export class NetClient {
           ? (msg.spawns as Record<string, { x: number; z: number }>)
           : {};
       this.map = String(msg.map || this.map);
+      this.roundStartedAt = typeof msg.roundStartedAt === 'number' ? msg.roundStartedAt : 0;
       this.phase = 'playing';
       this.onStart?.(this);
     }

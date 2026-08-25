@@ -48,6 +48,7 @@ import { matchSpawns } from './lib/spawn-layout';
 import { NetClient, type NetPeer, wsUrlFromLocation } from './lib/net';
 import { MAX_RECONNECT_ATTEMPTS, decideReconnect, waitBeforeNextAttempt } from './lib/reconnect';
 import { reconnectFlow, type AttemptResult } from './lib/reconnect-flow';
+import { serverEpochToClientPerf } from './lib/time-sync';
 import { judgeTrailRound } from './lib/round-rules';
 import {
   assignRoles,
@@ -2136,7 +2137,19 @@ function renderGame(): void {
       countdownEl.classList.remove('show');
       roundState = 'playing';
       roundTime = GAME.roundSeconds;
-      roundStats.startedAt = now;
+      // 2026-08-25: 서버 roundStartedAt으로 보정 — 클라 카운트다운 시작 시점이
+      // 서버 start broadcast 수신 후일 수 있어 살리기 가능 시간 체크(마지막 10초)가
+      // 서버와 어긋남. serverEpochToClientPerf로 epoch ms → performance.now() 변환.
+      // (net.roundStartedAt이 0이면 솔로 모드 — 클라 시간 그대로)
+      if (net?.roundStartedAt) {
+        roundStats.startedAt = serverEpochToClientPerf(
+          net.roundStartedAt,
+          Date.now(),
+          performance.now(),
+        );
+      } else {
+        roundStats.startedAt = now;
+      }
       if (game.tagger) game.tagger.setFrozen(true);
       graceTimeLeft = ROUND_START_GRACE_SEC;
       try {
