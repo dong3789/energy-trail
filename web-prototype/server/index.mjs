@@ -202,6 +202,10 @@ const httpServer = createServer((req, res) => {
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
   const player = {
     id: genId(),
     name: '손님',
@@ -347,6 +351,20 @@ setInterval(() => {
     if (room.phase === 'playing') tickPlaying(room);
   }
 }, TICK_MS);
+
+// 2026-08-25: heartbeat — 모바일 네트워크 전환 등으로 반쯤 죽은 연결(좀비 소켓) 정리.
+// pong 미응답 소켓은 terminate → close 핸들러가 방/플레이어 정리를 수행.
+const HEARTBEAT_MS = 30_000;
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, HEARTBEAT_MS);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`[energy-trail-ws] :${PORT} /ws`);
