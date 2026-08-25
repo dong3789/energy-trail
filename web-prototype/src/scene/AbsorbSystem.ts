@@ -60,13 +60,7 @@ export class AbsorbSystem {
    */
   update(dt: number, inTrail: boolean, frozen: boolean): AbsorbEvent {
     // 자동 시작: 자국 위에 있고, 쿨다운 0, 부스트 중 아님, 얼림 아님
-    if (
-      !this.absorbing &&
-      inTrail &&
-      !frozen &&
-      this.cooldown <= 0 &&
-      this.boostRemaining <= 0
-    ) {
+    if (!this.absorbing && inTrail && !frozen && this.cooldown <= 0 && this.boostRemaining <= 0) {
       this.tryStart();
     }
     // 흡수 중
