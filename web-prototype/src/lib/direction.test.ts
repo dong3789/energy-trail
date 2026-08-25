@@ -60,6 +60,17 @@ describe('direction', () => {
     it('2π → 0', () => {
       expect(wrapAngle(2 * Math.PI)).toBeCloseTo(0, 5);
     });
+
+    it('비유한 입력 (±Infinity/NaN) → 0 (while 무한루프 프리즈 방지)', () => {
+      expect(wrapAngle(Infinity)).toBe(0);
+      expect(wrapAngle(-Infinity)).toBe(0);
+      expect(wrapAngle(NaN)).toBe(0);
+    });
+
+    it('여러 바퀴 초과 입력도 정규화', () => {
+      expect(wrapAngle(3 * Math.PI)).toBeCloseTo(Math.PI, 5);
+      expect(wrapAngle(-4 * Math.PI)).toBeCloseTo(0, 5);
+    });
   });
 
   describe('shortestAngle', () => {

@@ -19,6 +19,9 @@ export function rotationFromVelocity(vx: number, vz: number): number {
  * 각도를 -π ~ +π 범위로 정규화
  */
 export function wrapAngle(angle: number): number {
+  // 2026-08-25: 비유한 입력(±Infinity/NaN) 가드 — while 루프가 ±Infinity에서 빠져나오지 못해
+  // 탭 프리즈로 이어짐. 회전 보간 특성상 안전한 0으로 수렴시킨다.
+  if (!Number.isFinite(angle)) return 0;
   // -π ~ π 로 wrap
   const TAU = Math.PI * 2;
   let a = angle;
