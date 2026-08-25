@@ -8,6 +8,7 @@ import {
   pickClearPoint,
   type GroundItem,
   type ItemKind,
+  type SpawnAvoid,
 } from '../lib/items';
 
 interface Spawned {
@@ -29,6 +30,7 @@ export class ItemField {
   private readonly obstacles: readonly ObstacleSpec[];
   private readonly halfW: number;
   private readonly halfD: number;
+  private readonly avoid: readonly SpawnAvoid[];
   private readonly spawned: Spawned[] = [];
   private readonly stickies: StickyZone[] = [];
   private nextId = 1;
@@ -41,11 +43,13 @@ export class ItemField {
     obstacles: readonly ObstacleSpec[];
     halfWidth: number;
     halfDepth: number;
+    avoid?: ReadonlyArray<SpawnAvoid>;
   }) {
     this.scene = opts.scene;
     this.obstacles = opts.obstacles;
     this.halfW = opts.halfWidth;
     this.halfD = opts.halfDepth;
+    this.avoid = opts.avoid ?? [];
     this.geom = new THREE.SphereGeometry(0.38, 12, 10);
     this.stickyGeom = new THREE.CircleGeometry(GAME.itemStickyRadius, 16);
     for (let i = 0; i < GAME.itemSpawnCount; i++) this.spawnNow();
@@ -149,12 +153,8 @@ export class ItemField {
   }
 
   private place(slot: Spawned): void {
-    const p = pickClearPoint(this.obstacles, this.halfW, this.halfD, Math.random);
-    if (!p) {
-      slot.mesh.visible = false;
-      slot.respawnAt = this.time + 2;
-      return;
-    }
+    // 2026-08-25: pickClearPoint가 항상 지점을 반환하므로 null 재시도 분기 제거
+    const p = pickClearPoint(this.obstacles, this.halfW, this.halfD, Math.random, 2, this.avoid);
     slot.data.x = p.x;
     slot.data.z = p.z;
     slot.mesh.position.set(p.x, 0.55, p.z);
