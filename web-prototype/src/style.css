@@ -1803,8 +1803,9 @@ input.invalid {
 
 .item-slot {
   position: absolute;
-  left: max(16px, env(safe-area-inset-left));
-  bottom: 96px;
+  /* 2026-08-25: 오른손 액션 버튼 — 왼손은 이동 전용. 좌측 얼림 버튼의 대칭 위치 */
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
   min-width: 88px;
   min-height: 64px;
   padding: 8px 12px;
