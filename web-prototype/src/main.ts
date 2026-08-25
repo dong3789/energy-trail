@@ -2270,6 +2270,8 @@ function renderGame(): void {
     obstacles: mapObstacles,
     halfWidth: mapHalfW,
     halfDepth: mapHalfD,
+    // 2026-08-25: 캐릭터 스폰 지점 위에는 아이템이 생기지 않도록 배제
+    avoid: [spawnLayout.player, ...spawnLayout.bots].map((p) => ({ x: p.x, z: p.z, r: 1.5 })),
   });
   game.disposers.push(() => itemField.dispose());
   let jellyLeft = 0;

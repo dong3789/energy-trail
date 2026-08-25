@@ -42,4 +42,23 @@ describe('ground items', () => {
     expect(p).not.toBeNull();
     if (p) expect(pointHitsObstacle(p.x, p.z, box, 0.5)).toBe(false);
   });
+
+  it('캐릭터 스폰 지점(avoid) 근처는 피해서 스폰한다', () => {
+    const box = [{ x: 0, z: 0, width: 4, depth: 4, height: 1 }];
+    // rng 시퀀스: 첫 후보(12.8, 12.8)는 장애물 밖이지만 avoid에 걸림 → 다음 후보를 찾아야 한다
+    const seq = [0.9, 0.9, 0.3, 0.2];
+    let call = 0;
+    const p = pickClearPoint(box, 20, 20, () => seq[call++ % seq.length], 0.5, [
+      { x: 12.8, z: 12.8, r: 3 },
+    ]);
+    const d = Math.hypot(p.x - 12.8, p.z - 12.8);
+    expect(d).toBeGreaterThanOrEqual(3);
+  });
+
+  it('모든 후보가 막혀도 null 대신 가장 여유로운 지점을 반환한다', () => {
+    // 맵 전체를 뒤덮는 장애물 — 24회 모두 실패하는 시나리오 (기존엔 null → 아이템 미스폰)
+    const wall = [{ x: 0, z: 0, width: 40, depth: 40, height: 1 }];
+    const p = pickClearPoint(wall, 20, 20, () => 0.5, 0.5);
+    expect(p).not.toBeNull();
+  });
 });
