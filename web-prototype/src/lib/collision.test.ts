@@ -35,4 +35,18 @@ describe('moveCircle', () => {
     const p = moveCircle(19.8, 0, 2, 0, 0.5, [], bounds);
     expect(p.x).toBeCloseTo(19.5, 5);
   });
+
+  it('does not tunnel through a thin wall on a large single-frame step', () => {
+    // 0.6m thin wall; a 3.0m step lands past it when only the destination is checked
+    const thinWall: Aabb = { x: 0, z: 0, width: 0.6, depth: 10 };
+    const p = moveCircle(2, 0, -3, 0, 0.4, [thinWall], bounds);
+    expect(p.x).toBeCloseTo(0.7, 2); // wall face (0.3) + radius (0.4)
+  });
+
+  it('does not tunnel diagonally at high speed and slides along the wall', () => {
+    const thinWall: Aabb = { x: 0, z: 0, width: 0.6, depth: 10 };
+    const p = moveCircle(1.5, 0, -3, 0.5, 0.4, [thinWall], bounds);
+    expect(p.x).toBeCloseTo(0.7, 2);
+    expect(p.z).toBeGreaterThan(0.4);
+  });
 });
