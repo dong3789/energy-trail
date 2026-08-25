@@ -46,6 +46,7 @@ import { moveCircle } from './lib/collision';
 import { contactsInRange, netCatchRadius, pickStickyPoint, withinDistance } from './lib/chase';
 import { matchSpawns } from './lib/spawn-layout';
 import { NetClient, type NetPeer, wsUrlFromLocation } from './lib/net';
+import { MAX_RECONNECT_ATTEMPTS, decideReconnect, waitBeforeNextAttempt } from './lib/reconnect';
 import { judgeTrailRound } from './lib/round-rules';
 import {
   assignRoles,
@@ -296,9 +297,6 @@ async function ensureNet(): Promise<NetClient | null> {
 async function tryAutoReconnect(code: string): Promise<void> {
   // 기존 UI가 있으면 정리 (중복 호출 방지)
   if (reconnectUi) return;
-  const MAX_ATTEMPTS = 5;
-  // 백오프: 1, 2, 4, 8, 16초
-  const backoff = (n: number): number => 1000 * Math.pow(2, n);
   const overlay = document.createElement('div');
   overlay.className = 'reconnect-overlay';
   const eyebrow = document.createElement('div');
@@ -439,40 +437,44 @@ async function tryAutoReconnect(code: string): Promise<void> {
     if (cancelled) return;
     attempts += 1;
     ui.attempts = attempts;
-    msg.textContent = `방 ${code} 재연결 시도 (${attempts}/${MAX_ATTEMPTS})`;
+    msg.textContent = `방 ${code} 재연결 시도 (${attempts}/${MAX_RECONNECT_ATTEMPTS})`;
     const res = await tryOnce();
     if (cancelled) return;
     if (res === 'ok') {
       cleanup();
       return;
     }
-    if (res === 'failed' || res === 'in_progress') {
-      if (attempts >= MAX_ATTEMPTS) {
-        msg.textContent = `재연결 실패 (${MAX_ATTEMPTS}회). 로비로 돌아갑니다.`;
-        cancelBtn.textContent = '로비로';
-        window.setTimeout(() => {
-          cleanup();
-          leaveToLobby();
-        }, 1500);
-        return;
-      }
-      // 다음 시도까지 백오프 + 카운트다운 표시
-      const waitMs = backoff(attempts - 1);
-      let remaining = Math.ceil(waitMs / 1000);
-      countdown.textContent = `${remaining}초 후 재시도`;
-      currentTimer = window.setInterval(() => {
-        remaining -= 1;
-        if (remaining <= 0) {
-          if (currentTimer) {
-            window.clearInterval(currentTimer);
-            currentTimer = 0;
-          }
-          void attempt();
-        } else {
-          countdown.textContent = `${remaining}초 후 재시도`;
-        }
-      }, 1000);
+    // 2026-08-25: decideReconnect로 다음 행동 결정 (ok/retry/abort).
+    // in_progress/failed 모두 retry/abort 정책 동일.
+    const outcome = decideReconnect({
+      attempt: attempts,
+      result: res === 'in_progress' ? 'phase_playing_or_ended' : 'connect_failed',
+    });
+    if (outcome === 'abort') {
+      msg.textContent = `재연결 실패 (${MAX_RECONNECT_ATTEMPTS}회). 로비로 돌아갑니다.`;
+      cancelBtn.textContent = '로비로';
+      window.setTimeout(() => {
+        cleanup();
+        leaveToLobby();
+      }, 1500);
+      return;
     }
+    // 다음 시도까지 백오프 + 카운트다운 표시
+    const waitMs = waitBeforeNextAttempt(attempts);
+    let remaining = Math.ceil(waitMs / 1000);
+    countdown.textContent = `${remaining}초 후 재시도`;
+    currentTimer = window.setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        if (currentTimer) {
+          window.clearInterval(currentTimer);
+          currentTimer = 0;
+        }
+        void attempt();
+      } else {
+        countdown.textContent = `${remaining}초 후 재시도`;
+      }
+    }, 1000);
   };
 
   // 첫 시도는 즉시 (사용자가 끊김 후 빠르게 복구되길 원함)
