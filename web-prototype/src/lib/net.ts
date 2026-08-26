@@ -57,6 +57,7 @@ export class NetClient {
   onRoom: ((c: NetClient) => void) | null = null;
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
+  onUse: ((id: string, kind: string) => void) | null = null;
   /** 2026-08-25: 부활됨 (id, x, z, invulnUntil) — 메인 루프에서 위치 텔레포트 + 무적 적용 */
   onRevived: ((p: { id: string; x: number; z: number; invulnUntil: number }) => void) | null = null;
   /** 2026-08-25: 살리기 실패 (사유) — UI 피드백 */
@@ -157,6 +158,10 @@ export class NetClient {
     this.send({ t: 'catch', id });
   }
 
+  sendUse(kind: string): void {
+    this.send({ t: 'use', kind });
+  }
+
   /** 2026-08-25: 살리기 요청 — 서버가 score/거리/시간 검증 후 응답 */
   sendRevive(targetId: string): void {
     this.send({ t: 'revive', id: targetId });
@@ -244,6 +249,7 @@ export class NetClient {
     }
     if (t === 'score' && typeof msg.n === 'number') this.score = msg.n;
     if (t === 'caught' && typeof msg.id === 'string') this.onCaught?.(msg.id);
+    if (t === 'use' && typeof msg.id === 'string') this.onUse?.(msg.id, String(msg.kind || ''));
     // 2026-08-25: 부활됨 — 위치 텔레포트 + 무적 적용
     if (t === 'revived' && typeof msg.id === 'string') {
       const inv = typeof msg.invulnUntil === 'number' ? msg.invulnUntil : 0;

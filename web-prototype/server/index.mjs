@@ -65,7 +65,15 @@ function publicPlayers(room) {
 }
 
 function roomPayload(room) {
-  return { t: 'room', code: room.code, hostId: room.hostId, map: room.map, mode: room.mode, phase: room.phase, players: publicPlayers(room) };
+  return {
+    t: 'room',
+    code: room.code,
+    hostId: room.hostId,
+    map: room.map,
+    mode: room.mode,
+    phase: room.phase,
+    players: publicPlayers(room),
+  };
 }
 
 function genCode() {
@@ -310,7 +318,8 @@ wss.on('connection', (ws) => {
     if (!slot) return;
     const { t } = msg;
     if (t === 'hello') {
-      if (typeof msg.name === 'string' && msg.name.trim()) player.name = msg.name.trim().slice(0, 12);
+      if (typeof msg.name === 'string' && msg.name.trim())
+        player.name = msg.name.trim().slice(0, 12);
       if (typeof msg.char === 'string') player.char = msg.char;
       if (typeof msg.wish === 'string') player.wish = msg.wish;
       if (typeof msg.map === 'string' && slot.room && slot.room.hostId === player.id) {
@@ -346,10 +355,15 @@ wss.on('connection', (ws) => {
       return;
     }
     if (t === 'join') {
-      const code = String(msg.code || '').replace(/\D/g, '').slice(0, 4);
+      const code = String(msg.code || '')
+        .replace(/\D/g, '')
+        .slice(0, 4);
       const room = rooms.get(code);
       if (!room || room.phase !== 'lobby') {
-        send(ws, { t: 'err', msg: '대기 중인 방을 찾지 못했어요. 방장이 대기실에 있는지 확인해 주세요.' });
+        send(ws, {
+          t: 'err',
+          msg: '대기 중인 방을 찾지 못했어요. 방장이 대기실에 있는지 확인해 주세요.',
+        });
         return;
       }
       if (room.players.size >= MAX_PLAYERS) {
@@ -373,18 +387,32 @@ wss.on('connection', (ws) => {
       broadcast(room, roomPayload(room));
       return;
     }
-    if (t === 'map' && typeof msg.map === 'string' && room.hostId === player.id && room.phase === 'lobby') {
+    if (
+      t === 'map' &&
+      typeof msg.map === 'string' &&
+      room.hostId === player.id &&
+      room.phase === 'lobby'
+    ) {
       room.map = msg.map;
       broadcast(room, roomPayload(room));
       return;
     }
     // 2026-08-25: 게임 모드 — items(아이템 배틀) / classic(체급 대결). 호스트만 변경.
-    if (t === 'mode' && typeof msg.mode === 'string' && room.hostId === player.id && room.phase === 'lobby') {
+    if (
+      t === 'mode' &&
+      typeof msg.mode === 'string' &&
+      room.hostId === player.id &&
+      room.phase === 'lobby'
+    ) {
       room.mode = msg.mode === 'classic' ? 'classic' : 'items';
       broadcast(room, roomPayload(room));
       return;
     }
-    if (t === 'start' && room.hostId === player.id && (room.phase === 'lobby' || room.phase === 'ended')) {
+    if (
+      t === 'start' &&
+      room.hostId === player.id &&
+      (room.phase === 'lobby' || room.phase === 'ended')
+    ) {
       room.roles = assignRoles([...room.players.values()]);
       for (const p of room.players.values()) {
         p.role = room.roles[p.id];
@@ -417,22 +445,52 @@ wss.on('connection', (ws) => {
       if (typeof msg.yaw === 'number') player.yaw = msg.yaw;
       return;
     }
-    if (t === 'score' && room.phase === 'playing' && player.role === 'runner' && !player.out && typeof msg.n === 'number' && Number.isFinite(msg.n)) {
+    if (
+      t === 'score' &&
+      room.phase === 'playing' &&
+      player.role === 'runner' &&
+      !player.out &&
+      typeof msg.n === 'number' &&
+      Number.isFinite(msg.n)
+    ) {
       room.score += 1;
       broadcast(room, { t: 'score', n: room.score });
       if (room.score >= TRAIL_GOAL) endRoom(room, 'runner', `자국 ${TRAIL_GOAL}개 수집`);
       return;
     }
+    // 2026-08-25: 아이템 사용 릴레이 — 다른 플레이어 화면에도 이펙트가 보이도록 (400ms 레이트 리밋)
+    if (t === 'use' && room.phase === 'playing') {
+      const nowUse = Date.now();
+      if (nowUse - (player.lastUseAt || 0) < 400) return;
+      player.lastUseAt = nowUse;
+      broadcast(
+        room,
+        { t: 'use', id: player.id, kind: String(msg.kind || '').slice(0, 12) },
+        player.id,
+      );
+      return;
+    }
     if (t === 'catch' && room.phase === 'playing' && player.role === 'tagger') {
       const target = room.players.get(String(msg.id || ''));
-      if (target && target.role === 'runner' && !target.out && dist(player, target) <= CATCH_DIST + 2) {
+      if (
+        target &&
+        target.role === 'runner' &&
+        !target.out &&
+        dist(player, target) <= CATCH_DIST + 2
+      ) {
         target.out = true;
         broadcast(room, { t: 'caught', id: target.id });
       }
       return;
     }
     // 2026-08-25: 동료 살리기 — 자국 3개를 써서 OUT된 사람 도망자를 가장자리로 부활
-    if (t === 'revive' && REVIVE_ENABLED && room.phase === 'playing' && player.role === 'runner' && !player.out) {
+    if (
+      t === 'revive' &&
+      REVIVE_ENABLED &&
+      room.phase === 'playing' &&
+      player.role === 'runner' &&
+      !player.out
+    ) {
       const target = room.players.get(String(msg.id || ''));
       // 가드: 대상은 OUT된 사람 도망자만 (AI는 부활 안 함)
       if (!target) {
