@@ -3919,7 +3919,8 @@ function renderGame(): void {
       }
       // 2026-08-26: 술래는 아이템 픽업/사용 안 함 — 모든 아이템이 도망자 전용.
       // (사용자 피드백: "술래가 자석 먹으면 바로 죽어, 이 아이템은 술래에게 필요없어요")
-      if (roundState === 'playing' && !game.out && !isTagger) {
+      // 2026-08-26: classic 모드는 아이템 없음 — 픽업 시도 안 함
+      if (roundState === 'playing' && !game.out && !isTagger && gameMode !== 'classic') {
         const got = itemField.tryPickup(selfMesh.position.x, selfMesh.position.z);
         if (got) {
           paintItemSlot();
