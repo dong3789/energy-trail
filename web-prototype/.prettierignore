@@ -3,3 +3,5 @@ node_modules
 coverage
 *.tsbuildinfo
 .DS_Store
+# Integration test scripts — CommonJS, project prettier 설정과 다름
+test-scripts/
