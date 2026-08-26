@@ -459,13 +459,22 @@ wss.on('connection', (ws) => {
       return;
     }
     // 2026-08-25: 아이템 사용 릴레이 — 다른 플레이어 화면에도 이펙트가 보이도록 (400ms 레이트 리밋)
-    if (t === 'use' && room.phase === 'playing') {
+    // 2026-08-26: ITEM_KINDS 화이트리스트로 kind 검증 (서버 권위 화이트리스트)
+// 10종(jelly, smoke, sticky, decoy, magnet, shield, dash, reversal, rocket, invis)
+    const ALLOWED_ITEM_KINDS = new Set([
+      'jelly', 'smoke', 'sticky', 'decoy', 'magnet',
+      'shield', 'dash', 'reversal', 'rocket', 'invis',
+    ]);
+    if (t === 'use' && room.phase === 'playing' && player.role === 'runner' && !player.out) {
+      const kind = String(msg.kind || '').slice(0, 12);
+      // kind가 화이트리스트에 없거나 빈 문자열이면 무시 (silent)
+      if (!ALLOWED_ITEM_KINDS.has(kind)) return;
       const nowUse = Date.now();
       if (nowUse - (player.lastUseAt || 0) < 400) return;
       player.lastUseAt = nowUse;
       broadcast(
         room,
-        { t: 'use', id: player.id, kind: String(msg.kind || '').slice(0, 12) },
+        { t: 'use', id: player.id, kind },
         player.id,
       );
       return;
