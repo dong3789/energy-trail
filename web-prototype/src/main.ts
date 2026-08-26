@@ -43,7 +43,13 @@ import {
   type RoomListing,
 } from './lib/room-code';
 import { moveCircle } from './lib/collision';
-import { contactsInRange, netCatchRadius, pickStickyPoint, withinDistance } from './lib/chase';
+import {
+  contactsInRange,
+  headingAway,
+  netCatchRadius,
+  pickStickyPoint,
+  withinDistance,
+} from './lib/chase';
 import { matchSpawns } from './lib/spawn-layout';
 import { NetClient, type NetPeer, wsUrlFromLocation } from './lib/net';
 import { MAX_RECONNECT_ATTEMPTS, decideReconnect, waitBeforeNextAttempt } from './lib/reconnect';
@@ -2576,6 +2582,108 @@ function renderGame(): void {
       (child.material as THREE.Material).dispose();
     });
   });
+  // 2026-08-25: 연막 전면 안개 오버레이 — 사용 화면을 거의 불투명하게 뒤덮음.
+  // pointer-events: none 으로 실맹 중에도 터치/키 조작은 그대로 통과.
+  const smokeFog = document.createElement('div');
+  smokeFog.className = 'smoke-fog';
+  canvasHost.appendChild(smokeFog);
+  game.disposers.push(() => {
+    smokeFog.remove();
+  });
+  // 2026-08-25: 신규 아이템 상태 — 자석/방어막/반전/로켓/투명/분신
+  let magnetLeft = 0;
+  let shieldLeft = 0;
+  let reversalLeft = 0;
+  let rocketLeft = 0;
+  let invisLeft = 0;
+  let decoyLeft = 0;
+  const decoyDir = new THREE.Vector3();
+  const decoyMesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.45, 0.9, 6, 12),
+    new THREE.MeshStandardMaterial({
+      color: 0x7fd8ff,
+      transparent: true,
+      opacity: 0.55,
+      emissive: 0x7fd8ff,
+      emissiveIntensity: 0.5,
+    }),
+  );
+  decoyMesh.visible = false;
+  decoyMesh.castShadow = true;
+  ctx.scene.add(decoyMesh);
+  const shieldVisual = new THREE.Mesh(
+    new THREE.SphereGeometry(0.95, 18, 14),
+    new THREE.MeshBasicMaterial({
+      color: 0x7dffb0,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+    }),
+  );
+  shieldVisual.visible = false;
+  ctx.scene.add(shieldVisual);
+  const magnetVisual = new THREE.Mesh(
+    new THREE.RingGeometry(6.4, 7, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xff6b9d,
+      transparent: true,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  magnetVisual.rotation.x = -Math.PI / 2;
+  magnetVisual.position.y = 0.08;
+  magnetVisual.visible = false;
+  ctx.scene.add(magnetVisual);
+  game.disposers.push(() => {
+    ctx.scene.remove(decoyMesh);
+    ctx.scene.remove(shieldVisual);
+    ctx.scene.remove(magnetVisual);
+    decoyMesh.geometry.dispose();
+    (decoyMesh.material as THREE.Material).dispose();
+    shieldVisual.geometry.dispose();
+    (shieldVisual.material as THREE.Material).dispose();
+    magnetVisual.geometry.dispose();
+    (magnetVisual.material as THREE.Material).dispose();
+  });
+  const removeDecoy = (): void => {
+    decoyMesh.visible = false;
+    decoyDir.set(0, 0, 0);
+  };
+  const spawnDecoy = (): void => {
+    decoyMesh.position.set(selfMesh.position.x, 0.7, selfMesh.position.z);
+    decoyMesh.visible = true;
+    const away = headingAway(
+      selfMesh.position.x,
+      selfMesh.position.z,
+      taggerMesh.position.x,
+      taggerMesh.position.z,
+    );
+    if (away) decoyDir.set(away.x, 0, away.z);
+    else decoyDir.set(Math.random() * 2 - 1, 0, Math.random() * 2 - 1).normalize();
+  };
+  const doDash = (): void => {
+    const dir = new THREE.Vector3();
+    if (cameraFacing.lengthSq() > 1e-4) dir.copy(cameraFacing);
+    else selfMesh.getWorldDirection(dir);
+    dir.y = 0;
+    if (dir.lengthSq() < 1e-4) dir.set(0, 0, -1);
+    dir.normalize();
+    const resolved = moveCircle(
+      selfMesh.position.x,
+      selfMesh.position.z,
+      dir.x * GAME.itemDashDistance,
+      dir.z * GAME.itemDashDistance,
+      0.45,
+      mapObstacles,
+      { halfWidth: mapHalfW, halfDepth: mapHalfD },
+    );
+    selfMesh.position.x = resolved.x;
+    selfMesh.position.z = resolved.z;
+    triggerShake(0.2);
+    sound.playBoost();
+  };
   const setSelfHidden = (hidden: boolean): void => {
     selfMesh.traverse((child) => {
       if (child instanceof THREE.Sprite) {
@@ -2602,8 +2710,32 @@ function renderGame(): void {
     else if (kind === 'smoke') {
       smokeLeft = GAME.itemSmokeDuration;
       smokeCloud.visible = true;
+      smokeFog.classList.add('on');
       setSelfHidden(true);
       chasePrey = undefined;
+      for (const bot of bots) bot.taggerAI?.breakChase(selfMesh.position);
+    } else if (kind === 'decoy') {
+      decoyLeft = GAME.itemDecoyDuration;
+      spawnDecoy();
+      chasePrey = undefined;
+    } else if (kind === 'magnet') {
+      magnetLeft = GAME.itemMagnetDuration;
+      magnetVisual.visible = true;
+    } else if (kind === 'shield') {
+      shieldLeft = GAME.itemShieldDuration;
+      shieldVisual.visible = true;
+    } else if (kind === 'dash') {
+      doDash();
+    } else if (kind === 'reversal') {
+      reversalLeft = GAME.itemReversalDuration;
+      taggerAI?.setInverted(true);
+    } else if (kind === 'rocket') {
+      rocketLeft = GAME.itemRocketDuration;
+    } else if (kind === 'invis') {
+      invisLeft = GAME.itemInvisDuration;
+      setSelfHidden(true);
+      chasePrey = undefined;
+      taggerAI?.breakChase(selfMesh.position);
       for (const bot of bots) bot.taggerAI?.breakChase(selfMesh.position);
     } else if (kind === 'sticky') {
       itemField.dropSticky(selfMesh.position.x, selfMesh.position.z);
@@ -3444,6 +3576,20 @@ function renderGame(): void {
     }
     // 2026-08-15: 라운드 종료 후 — 입력/물리 정지
     if (roundState === 'ended') {
+      // 연막 지속 중 라운드가 끝나면 안개가 결과 화면에 남지 않도록 정리
+      smokeFog.classList.remove('on');
+      // 2026-08-25: 신규 아이템 효과도 라운드 종료와 함께 정리
+      if (invisLeft > 0) setSelfHidden(false);
+      magnetLeft = 0;
+      shieldLeft = 0;
+      reversalLeft = 0;
+      rocketLeft = 0;
+      invisLeft = 0;
+      decoyLeft = 0;
+      removeDecoy();
+      magnetVisual.visible = false;
+      shieldVisual.visible = false;
+      taggerAI?.setInverted(false);
       return;
     }
 
@@ -3652,6 +3798,7 @@ function renderGame(): void {
         }
         if (smokeLeft <= 0) {
           smokeCloud.visible = false;
+          smokeFog.classList.remove('on');
           setSelfHidden(false);
           chasePrey = undefined;
           for (const bot of bots) {
@@ -3662,12 +3809,65 @@ function renderGame(): void {
           taggerAI?.setFrozen(true);
         }
       }
+      // 2026-08-25: 신규 아이템 프레임 갱신
+      if (magnetLeft > 0) {
+        magnetLeft = Math.max(0, magnetLeft - effectiveDt);
+        magnetVisual.position.set(selfMesh.position.x, 0.08, selfMesh.position.z);
+        magnetVisual.scale.setScalar(1 + Math.sin(t * 5) * 0.04);
+        // 반경 내 자국 최대 3개/프레임 흡입 — 점수는 일반 흡수와 동일 경로
+        for (let i = 0; i < 3; i++) {
+          if (trails.consumeNearest(selfMesh.position, GAME.itemMagnetRadius) > 0) addTrailScore(1);
+          else break;
+        }
+        if (magnetLeft <= 0) magnetVisual.visible = false;
+      }
+      if (shieldLeft > 0) {
+        shieldLeft = Math.max(0, shieldLeft - effectiveDt);
+        shieldVisual.position.copy(selfMesh.position);
+        if (shieldLeft <= 0) shieldVisual.visible = false;
+      }
+      if (reversalLeft > 0) {
+        reversalLeft = Math.max(0, reversalLeft - effectiveDt);
+        if (reversalLeft <= 0) taggerAI?.setInverted(false);
+      }
+      if (rocketLeft > 0) rocketLeft = Math.max(0, rocketLeft - effectiveDt);
+      if (invisLeft > 0) {
+        invisLeft = Math.max(0, invisLeft - effectiveDt);
+        if (invisLeft <= 0) setSelfHidden(false);
+      }
+      if (decoyLeft > 0) {
+        decoyLeft = Math.max(0, decoyLeft - effectiveDt);
+        if (decoyMesh.visible && decoyDir.lengthSq() > 1e-4) {
+          const resolved = moveCircle(
+            decoyMesh.position.x,
+            decoyMesh.position.z,
+            decoyDir.x * GAME.itemDecoySpeed * effectiveDt,
+            decoyDir.z * GAME.itemDecoySpeed * effectiveDt,
+            0.45,
+            mapObstacles,
+            { halfWidth: mapHalfW, halfDepth: mapHalfD },
+          );
+          decoyMesh.position.x = resolved.x;
+          decoyMesh.position.z = resolved.z;
+          decoyMesh.position.y = 0.7 + Math.abs(Math.sin(t * 4)) * 0.12;
+          decoyMesh.rotation.y += effectiveDt * 2;
+        }
+        if (decoyLeft <= 0) removeDecoy();
+      }
       const playerSlow = itemField.isInSticky(selfMesh.position.x, selfMesh.position.z);
+      // 2026-08-25: 속도 우선순위 — 끈끈이 < 젤리 < 로켓(2배)
       player.setExtraSpeedMul(
-        playerSlow ? GAME.itemStickySlowMul : jellyLeft > 0 ? GAME.itemJellySpeedMul : 1,
+        playerSlow
+          ? GAME.itemStickySlowMul
+          : rocketLeft > 0
+            ? GAME.itemRocketSpeedMul
+            : jellyLeft > 0
+              ? GAME.itemJellySpeedMul
+              : 1,
       );
       preyPointsScratch.length = 0;
-      if (!isTagger && !game.out) {
+      // 2026-08-25: 투명 아이템 — AI 술래 타겟 후보에서 제외 (몸은 반투명 렌더)
+      if (!isTagger && !game.out && invisLeft <= 0) {
         preyPointsScratch.push({
           x: selfMesh.position.x,
           z: selfMesh.position.z,
@@ -3684,11 +3884,30 @@ function renderGame(): void {
           isPlayer: false,
         });
       }
+      // 2026-08-25: 분신 — AI 술래의 추격 후보에 가짜 분신 포함
+      if (decoyLeft > 0 && decoyMesh.visible) {
+        preyPointsScratch.push({
+          x: decoyMesh.position.x,
+          z: decoyMesh.position.z,
+          mesh: decoyMesh,
+          isPlayer: false,
+        });
+      }
       if (taggerStunLeft > 0) {
         taggerStunLeft = Math.max(0, taggerStunLeft - effectiveDt);
         if (taggerStunLeft <= 0 && graceTimeLeft <= 0) taggerAI?.setFrozen(false);
       }
-      if (taggerAI && smokeLeft <= 0) {
+      if (taggerAI && smokeLeft <= 0 && decoyLeft > 0 && decoyMesh.visible) {
+        // 2026-08-25: 분신 활성 — AI 술래는 무조건 분신만 쫓는다
+        taggerAI.setTarget(decoyMesh);
+        taggerAI.setChaseEnabled(true);
+        chasePrey = {
+          x: decoyMesh.position.x,
+          z: decoyMesh.position.z,
+          mesh: decoyMesh,
+          isPlayer: false,
+        };
+      } else if (taggerAI && smokeLeft <= 0) {
         const locked = chasePrey;
         const currentPrey = locked
           ? preyPointsScratch.find((p) => p.mesh === locked.mesh)
@@ -3743,6 +3962,17 @@ function renderGame(): void {
         );
         const playerHit = hits.find((p) => p.isPlayer);
         const liveHumans = matchEntry === 'room' && (net?.players.length ?? 0) >= 2;
+        // 2026-08-25: 분신 포착 — 술래가 분신을 잡으면 분신 소멸 + 술래 잠깐 멍함
+        const decoyHit =
+          decoyLeft > 0 && decoyMesh.visible ? hits.find((p) => p.mesh === decoyMesh) : undefined;
+        if (decoyHit) {
+          decoyLeft = 0;
+          removeDecoy();
+          taggerStunLeft = Math.max(taggerStunLeft, 1.2);
+          taggerAI?.setFrozen(true);
+          triggerShake(0.2);
+          sound.playAbsorbCancel();
+        }
         if (liveHumans && isTagger) {
           for (const prey of hits) {
             const hitBot = bots.find((b) => b.mesh === prey.mesh);
@@ -3750,9 +3980,34 @@ function renderGame(): void {
           }
         }
         if (playerHit) {
-          // 2026-08-25: isInvulnerable는 1회용 boolean만 봄. 부활 후 1초 무적은
-          // setInvulnerableUntilMs로 시간 기반이므로 isCurrentlyInvulnerable로 확인.
-          if (absorb && absorb.isCurrentlyInvulnerable()) {
+          if (shieldLeft > 0) {
+            // 2026-08-25: 방어막 — 잡힘 1회 무효 + 술래 반대 방향으로 넉백
+            shieldLeft = 0;
+            shieldVisual.visible = false;
+            const away = headingAway(
+              selfMesh.position.x,
+              selfMesh.position.z,
+              taggerMesh.position.x,
+              taggerMesh.position.z,
+            );
+            if (away) {
+              const pushed = moveCircle(
+                selfMesh.position.x,
+                selfMesh.position.z,
+                away.x * 4,
+                away.z * 4,
+                0.45,
+                mapObstacles,
+                { halfWidth: mapHalfW, halfDepth: mapHalfD },
+              );
+              selfMesh.position.x = pushed.x;
+              selfMesh.position.z = pushed.z;
+            }
+            triggerShake(0.3);
+            sound.playBoost();
+          } else if (absorb && absorb.isCurrentlyInvulnerable()) {
+            // 2026-08-25: isInvulnerable는 1회용 boolean만 봄. 부활 후 1초 무적은
+            // setInvulnerableUntilMs로 시간 기반이므로 isCurrentlyInvulnerable로 확인.
             absorb.consumeInvulnerability();
             triggerShake(0.3);
             sound.playBoost();

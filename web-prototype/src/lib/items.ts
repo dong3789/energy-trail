@@ -1,6 +1,17 @@
 import type { ObstacleSpec } from '../config';
 
-export const ITEM_KINDS = ['jelly', 'smoke', 'sticky'] as const;
+export const ITEM_KINDS = [
+  'jelly',
+  'smoke',
+  'sticky',
+  'decoy',
+  'magnet',
+  'shield',
+  'dash',
+  'reversal',
+  'rocket',
+  'invis',
+] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
 export const ITEM_META: Record<
@@ -8,8 +19,15 @@ export const ITEM_META: Record<
   { label: string; color: number; emoji: string; hint: string }
 > = {
   jelly: { label: '젤리', color: 0xff85c1, emoji: '🍬', hint: '잠깐 빨라짐' },
-  smoke: { label: '연막', color: 0x9b59b6, emoji: '💨', hint: '술래 시야에서 숨기' },
+  smoke: { label: '연막', color: 0x9b59b6, emoji: '💨', hint: '화면 가득 안개' },
   sticky: { label: '끈끈이', color: 0xffd83d, emoji: '🍯', hint: '발밑에 둔덕' },
+  decoy: { label: '분신', color: 0x7fd8ff, emoji: '🫥', hint: '술래가 분신을 쫓아요' },
+  magnet: { label: '자석', color: 0xff6b9d, emoji: '🧲', hint: '주변 자국 흡수' },
+  shield: { label: '방어막', color: 0x7dffb0, emoji: '🛡️', hint: '한 번 잡혀도 무효' },
+  dash: { label: '대시', color: 0xffe14a, emoji: '⚡', hint: '즉시 점프' },
+  reversal: { label: '반전', color: 0xb39dff, emoji: '🌀', hint: '술래 방향 혼란' },
+  rocket: { label: '로켓', color: 0xff8c42, emoji: '🚀', hint: '2배 가속!' },
+  invis: { label: '투명', color: 0xd0d0ff, emoji: '👻', hint: '술래에게 안 보임' },
 };
 
 export interface GroundItem {
