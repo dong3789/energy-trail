@@ -1371,7 +1371,8 @@ function renderGame(): void {
   };
   // 2026-08-15 v2: 카메라 회전 smoothing — target → actual lerp factor
   // (작을수록 부드럽게 따라옴, 클수록 즉각 반응)
-  const CAM_ROT_SMOOTHING = 0.18;
+  // 2026-08-26: 0.18 → 0.25 — 사용자가 "더 정확하고 빨리" 요청, 부드러움 유지하면서 반응 ~4 프레임
+  const CAM_ROT_SMOOTHING = 0.25;
 
   // 술래 그물망: 날아가며 벌어지고, 사거리 끝에서 바닥에 잠깐 남음
   const shotState = {
@@ -4580,7 +4581,11 @@ function renderGame(): void {
     // 2) desired camera position: player 뒤 + 거리 + pitch
     cameraDesired.copy(selfMesh.position);
     cameraDesired.addScaledVector(cameraFacing, -camState.distance);
-    const baseFollowY = SCENE.cameraFollowHeight;
+    // 2026-08-26: 카메라 y에 selfMesh.position.y 더하기 — 게임 시작 시 카운트다운
+    // (y=7 고정) → playing 전환 시 y가 떨어지던 버그 수정. 캐릭터 머리 위
+    // 일관된 거리 유지 (기존 baseFollowY=SCENE.cameraFollowHeight만 쓰면
+    // selfMesh가 슬로프/점프할 때 카메라가 따라가지 않음).
+    const baseFollowY = selfMesh.position.y + SCENE.cameraFollowHeight;
     const pitchOffset = Math.sin(camState.pitch) * camState.distance * 0.4;
     cameraDesired.y = baseFollowY + pitchOffset;
 
