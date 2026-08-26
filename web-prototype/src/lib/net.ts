@@ -58,6 +58,7 @@ export class NetClient {
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
   onUse: ((id: string, kind: string) => void) | null = null;
+  onShieldBlock: ((id: string) => void) | null = null;
   /** 2026-08-25: 부활됨 (id, x, z, invulnUntil) — 메인 루프에서 위치 텔레포트 + 무적 적용 */
   onRevived: ((p: { id: string; x: number; z: number; invulnUntil: number }) => void) | null = null;
   /** 2026-08-25: 살리기 실패 (사유) — UI 피드백 */
@@ -149,9 +150,9 @@ export class NetClient {
     this.send({ t: 'pos', x, z, yaw });
   }
 
-  sendScore(): void {
-    // 2026-08-25: 서버가 n(유한한 숫자)을 필수 검증 — NaN 주입 차단. 미전송 시 점수가 무시된다.
-    this.send({ t: 'score', n: 1 });
+  sendScore(n = 1): void {
+    // 2026-08-25: 서버가 n(유한한 숫자, 1~10 클램프)을 필수 검증 — 배치 점수는 n에 누적치를 담아 전송
+    this.send({ t: 'score', n });
   }
 
   sendCatch(id: string): void {
@@ -250,6 +251,7 @@ export class NetClient {
     if (t === 'score' && typeof msg.n === 'number') this.score = msg.n;
     if (t === 'caught' && typeof msg.id === 'string') this.onCaught?.(msg.id);
     if (t === 'use' && typeof msg.id === 'string') this.onUse?.(msg.id, String(msg.kind || ''));
+    if (t === 'shieldblock' && typeof msg.id === 'string') this.onShieldBlock?.(msg.id);
     // 2026-08-25: 부활됨 — 위치 텔레포트 + 무적 적용
     if (t === 'revived' && typeof msg.id === 'string') {
       const inv = typeof msg.invulnUntil === 'number' ? msg.invulnUntil : 0;

@@ -539,6 +539,7 @@ export const GAME = {
   itemRocketDuration: 3,
   itemRocketSpeedMul: 2.0,
   itemInvisDuration: 5,
+  itemSmokeFogRange: 12, // 2026-08-25: 이 거리 이내에서 쓴 상대 연막만 화면 안개로 (원거리는 이펙트만)
   itemStickyDuration: 5.0,
   itemStickyRadius: 2.4,
   itemStickySlowMul: 0.45,

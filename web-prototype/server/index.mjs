@@ -19,6 +19,9 @@ const REVIVE_RANGE = 3.5; // 살리는 쪽 → 시체까지 최대 거리
 const REVIVE_INVULNERABLE_SECONDS = 1.0; // 부활 후 무적
 const REVIVE_EDGE_MARGIN = 3.0; // 가장자리 스폰 마진
 const REVIVE_COOLDOWN_MS = 8000; // 2026-08-25: 같은 대상 재살리기 cooldown — 자국 3개 가치(≈8초)에 맞춰 서버 권위 가드
+const SHIELD_MS = 8000; // 2026-08-25: 방어막 지속시간(클라 itemShieldDuration과 일치) — 서버 권위 catch 차단용
+const SCORE_MIN_INTERVAL_MS = 250; // 2026-08-25: 점수 연타 제한 — 배치 전송 클라이언트 기준
+const SCORE_MAX_ADD = 10; // 2026-08-25: 한 메시지당 최대 가점 (배치 n 클램프)
 const MAP_WIDTH = 42; // config.ts의 MAP.width 와 일치
 const MAP_DEPTH = 42;
 const TAGGER_WIN_OUT_COUNT = 2; // 동시 다운 2명이면 술래 승 (기획안)
@@ -32,7 +35,7 @@ process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
 });
 
-/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number }} Player */
+/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number, shieldUntil?: number, lastScoreAt?: number }} Player */
 /** @typedef {{ code: string, hostId: string, map: string, mode: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number> }} Room */
 
 /** @type {Map<string, Room>} */
@@ -109,7 +112,8 @@ function placePlayers(room) {
     p.x = pos.x;
     p.z = pos.z;
     p.yaw = 0;
-    p.invulnUntil = 0; // 2026-08-25: 라운드 시작 시 무적 없음
+    p.invulnUntil = 0;
+    p.shieldUntil = 0; // 2026-08-25: 라운드 시작 시 무적 없음
     spawns[p.id] = { x: p.x, z: p.z };
   }
   return spawns;
@@ -169,7 +173,8 @@ function resetRoomToLobby(room) {
   for (const p of room.players.values()) {
     p.out = false;
     p.role = '';
-    p.invulnUntil = 0; // 2026-08-25: 다음 라운드 위해 무적 초기화
+    p.invulnUntil = 0;
+    p.shieldUntil = 0; // 2026-08-25: 다음 라운드 위해 무적 초기화
   }
   broadcast(room, roomPayload(room));
 }
@@ -221,6 +226,11 @@ function tickPlaying(room) {
     for (const run of aliveRunners) {
       // 2026-08-25: 부활 무적 (reviveInvulnerabilitySeconds) 적용
       if (run.invulnUntil > now) continue;
+      // 2026-08-25: 방어막 서버 권위 — 잡힘 1회 무효 + 소모, 클라에 차단 브로드캐스트
+      if (run.shieldUntil && run.shieldUntil > now) {
+        broadcast(room, { t: 'shieldblock', id: run.id });
+        continue;
+      }
       if (dist(tag, run) <= CATCH_DIST) {
         run.out = true;
         broadcast(room, { t: 'caught', id: run.id });
@@ -418,6 +428,7 @@ wss.on('connection', (ws) => {
         p.role = room.roles[p.id];
         p.out = false;
         p.invulnUntil = 0;
+    p.shieldUntil = 0;
       }
       room.phase = 'playing';
       room.startedAt = Date.now();
@@ -453,7 +464,12 @@ wss.on('connection', (ws) => {
       typeof msg.n === 'number' &&
       Number.isFinite(msg.n)
     ) {
-      room.score += 1;
+      // 2026-08-25: 레이트 리밋 + 클램프 — 연타 점수 폭주 차단 (자석 배치 전송은 250ms 간격으로 통과)
+      const nowScore = Date.now();
+      if (nowScore - (player.lastScoreAt || 0) < SCORE_MIN_INTERVAL_MS) return;
+      player.lastScoreAt = nowScore;
+      const add = Math.max(1, Math.min(SCORE_MAX_ADD, Math.floor(msg.n)));
+      room.score += add;
       broadcast(room, { t: 'score', n: room.score });
       if (room.score >= TRAIL_GOAL) endRoom(room, 'runner', `자국 ${TRAIL_GOAL}개 수집`);
       return;
@@ -483,7 +499,12 @@ wss.on('connection', (ws) => {
       const nowUse = Date.now();
       if (nowUse - (player.lastUseAt || 0) < 400) return;
       player.lastUseAt = nowUse;
-      broadcast(room, { t: 'use', id: player.id, kind }, player.id);
+      // 2026-08-25: 방어막 — 서버 권위 추적 (catch 판정에서 차단에 사용)
+      const kindUse = String(msg.kind || '').slice(0, 12);
+      if (kindUse === 'shield' && player.role === 'runner') {
+        player.shieldUntil = nowUse + SHIELD_MS;
+      }
+      broadcast(room, { t: 'use', id: player.id, kind: kindUse }, player.id);
       return;
     }
     if (t === 'catch' && room.phase === 'playing' && player.role === 'tagger') {
@@ -494,6 +515,11 @@ wss.on('connection', (ws) => {
         !target.out &&
         dist(player, target) <= CATCH_DIST + 2
       ) {
+        // 2026-08-25: 방어막 서버 권위 — 메시지 캐치도 차단 + 소모
+if (target.shieldUntil && target.shieldUntil > Date.now()) {
+      broadcast(room, { t: 'shieldblock', id: target.id });
+      return;
+    }
         target.out = true;
         broadcast(room, { t: 'caught', id: target.id });
       }

@@ -2114,9 +2114,12 @@ function renderGame(): void {
     showResult(judged.winner, judged.reason);
     return true;
   };
+  // 2026-08-25: 멀티 점수 배치 — 서버 레이트 리밋(250ms) 대응, 렌더 루프에서 300ms 간격 플러시
+  let pendingNetScore = 0;
+  let lastScoreSentAt = 0;
   const addTrailScore = (n = 1): void => {
     if (matchEntry === 'room' && net?.connected) {
-      net.sendScore();
+      pendingNetScore += n;
       return;
     }
     roundStats.absorbed += n;
@@ -3426,10 +3429,16 @@ function renderGame(): void {
       if (id === net?.id) return;
       const bot = bots.find((b) => b.kind === 'remote' && b.id === id);
       spawnItemBurst(bot ? bot.mesh.position : selfMesh.position, kind);
-      if (kind === 'smoke' && isTagger) {
-        // 상대 러너의 연막 — 술래 화면을 안개로 덮는다
-        smokeFog.classList.add('on');
-        remoteFogLeft = GAME.itemSmokeDuration;
+      if (kind === 'smoke' && isTagger && bot) {
+        // 2026-08-25: 거리 게이트 — 근거리(12m)에서 쓴 연막만 화면 안개로, 원거리는 이펙트만
+        const d = Math.hypot(
+          bot.mesh.position.x - selfMesh.position.x,
+          bot.mesh.position.z - selfMesh.position.z,
+        );
+        if (d <= GAME.itemSmokeFogRange) {
+          smokeFog.classList.add('on');
+          remoteFogLeft = GAME.itemSmokeDuration;
+        }
       }
       if (kind === 'invis' && bot) {
         bot.mesh.visible = false;
@@ -3440,6 +3449,37 @@ function renderGame(): void {
         remoteShieldTarget = bot;
         remoteShieldLeft = GAME.itemShieldDuration;
         remoteShieldBubble.visible = true;
+      }
+    };
+    // 2026-08-25: 서버 권위 방어막 차단 수신 — 당사자는 넉백, 타인은 이펙트만
+    net.onShieldBlock = (id) => {
+      if (id === net?.id) {
+        shieldLeft = 0;
+        shieldVisual.visible = false;
+        const away = headingAway(
+          selfMesh.position.x,
+          selfMesh.position.z,
+          taggerMesh.position.x,
+          taggerMesh.position.z,
+        );
+        if (away) {
+          const pushed = moveCircle(
+            selfMesh.position.x,
+            selfMesh.position.z,
+            away.x * 4,
+            away.z * 4,
+            0.45,
+            mapObstacles,
+            { halfWidth: mapHalfW, halfDepth: mapHalfD },
+          );
+          selfMesh.position.x = pushed.x;
+          selfMesh.position.z = pushed.z;
+        }
+        triggerShake(0.3);
+        sound.playBoost();
+      } else {
+        const bot = bots.find((b) => b.kind === 'remote' && b.id === id);
+        if (bot) spawnItemBurst(bot.mesh.position, 'shield');
       }
     };
     net.onCaught = (id) => {
@@ -4033,6 +4073,12 @@ function renderGame(): void {
           (burstMesh.material as THREE.MeshBasicMaterial).opacity = 0;
           burstT = -1;
         }
+      }
+      // 2026-08-25: 점수 배치 플러시
+      if (pendingNetScore > 0 && performance.now() - lastScoreSentAt > 300) {
+        net?.sendScore(pendingNetScore);
+        pendingNetScore = 0;
+        lastScoreSentAt = performance.now();
       }
       const playerSlow = itemField.isInSticky(selfMesh.position.x, selfMesh.position.z);
       // 2026-08-25: 속도 우선순위 — 끈끈이 < 젤리 < 로켓(2배)
