@@ -31,6 +31,7 @@ export class ItemField {
   private readonly halfW: number;
   private readonly halfD: number;
   private readonly avoid: readonly SpawnAvoid[];
+  private readonly enabled: boolean;
   private readonly spawned: Spawned[] = [];
   private readonly stickies: StickyZone[] = [];
   private nextId = 1;
@@ -44,15 +45,18 @@ export class ItemField {
     halfWidth: number;
     halfDepth: number;
     avoid?: ReadonlyArray<SpawnAvoid>;
+    enabled?: boolean;
   }) {
     this.scene = opts.scene;
     this.obstacles = opts.obstacles;
     this.halfW = opts.halfWidth;
     this.halfD = opts.halfDepth;
     this.avoid = opts.avoid ?? [];
+    // 2026-08-25: 클래식 모드 — enabled=false면 스폰도 줍기도 없음 (지면 장식만 유지)
+    this.enabled = opts.enabled ?? true;
     this.geom = new THREE.SphereGeometry(0.38, 12, 10);
     this.stickyGeom = new THREE.CircleGeometry(GAME.itemStickyRadius, 16);
-    for (let i = 0; i < GAME.itemSpawnCount; i++) this.spawnNow();
+    if (this.enabled) for (let i = 0; i < GAME.itemSpawnCount; i++) this.spawnNow();
   }
 
   update(dt: number): void {
@@ -77,6 +81,7 @@ export class ItemField {
   }
 
   tryPickup(x: number, z: number): ItemKind | null {
+    if (!this.enabled) return null;
     const live = this.spawned.filter((s) => s.respawnAt === 0).map((s) => s.data);
     const hit = nearestGroundItem(live, x, z, GAME.itemPickupRadius);
     if (!hit) return null;

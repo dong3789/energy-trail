@@ -4482,3 +4482,9 @@ input.invalid {
   margin-top: 8px;
   min-width: 200px;
 }
+
+/* 2026-08-25: 게임 모드 토글 선택 상태 (아이템 배틀 / 클래식) */
+.waiting-wish-btn.selected {
+  background: #fff44a;
+  box-shadow: 0 3px 0 #2a1a4a;
+}
