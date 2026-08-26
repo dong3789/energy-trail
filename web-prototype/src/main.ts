@@ -257,6 +257,12 @@ let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
 let roomJoined = true;
 let matchEntry: MatchEntryMode = 'solo';
+// 2026-08-25: 클래식 모드 — 아이템 없이 체급(순수 실력)으로만 하는 모드
+let gameMode: 'items' | 'classic' = 'items';
+// 2026-08-25: 초대 링크 — ?room=CODE 로 공유된 링크를 탭하면 해당 방으로 자동 입장
+const inviteCode =
+  new URLSearchParams(window.location.search).get('room')?.replace(/\D/g, '').slice(0, 4) ?? '';
+let inviteConsumed = false;
 let net: NetClient | null = null;
 // 2026-08-25: 자동 재연결 상태 — 끊김 시 카운트다운 UI가 활성인지.
 // 활성 중 사용자가 cancel 누르면 즉시 로비로 보냄.
@@ -755,6 +761,11 @@ function renderLobby(): void {
     <div class="lobby-eyebrow">로비 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
     <h1 class="lobby-title">로비</h1>
     <p class="lobby-sub">방에 들어가면 대기실에서 술래를 정합니다.</p>
+    ${
+      inviteCode && !inviteConsumed
+        ? `<button type="button" class="button primary lobby-invite">📨 초대 방 ${inviteCode} 참여하기</button>`
+        : ''
+    }
     <div class="lobby-summary">
       <div class="lobby-summary-card">
         <span class="lobby-summary-label">닉네임</span>
@@ -809,6 +820,20 @@ function renderLobby(): void {
     roomJoined = true;
     roomCode = 'SOLO';
     setScreen('room');
+  });
+  // 2026-08-25: 초대 링크 입장 — 방 찾기 화면으로 넘긴 뒤 코드 자동 주입 (기존 검증/에러 UI 재사용)
+  const inviteBtn = content.querySelector<HTMLButtonElement>('.lobby-invite');
+  inviteBtn?.addEventListener('click', () => {
+    inviteConsumed = true;
+    matchEntry = 'room';
+    roomMode = 'find';
+    roomJoined = false;
+    setScreen('room');
+    const joinInput = root.querySelector<HTMLInputElement>('#room-join-code');
+    if (joinInput) {
+      joinInput.value = inviteCode;
+      joinInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
   });
   createBtn?.addEventListener('click', () => {
     matchEntry = 'room';
@@ -878,8 +903,8 @@ function renderRoom(): void {
             .join('')}
         </div>
         ${
-          !isSolo && isCreate
-            ? `<button type="button" class="button ghost room-copy" id="room-copy">코드 복사</button>`
+          !isSolo
+            ? `<button type="button" class="button ghost room-copy" id="room-copy">초대 링크 복사</button>`
             : ''
         }
         <span class="room-code-status">${isSolo ? 'AI 대기' : '실시간 대기'}</span>`
@@ -904,6 +929,13 @@ function renderRoom(): void {
     <div class="room-map-section">
       <div class="room-map-section-label">맵 선택</div>
       <div class="room-map-grid" id="room-map-grid"></div>
+    </div>
+    <div class="room-mode-section">
+      <div class="room-map-section-label">게임 모드</div>
+      <div class="waiting-wish" id="waiting-mode">
+        <button type="button" class="waiting-wish-btn" data-gmode="items">아이템 배틀</button>
+        <button type="button" class="waiting-wish-btn" data-gmode="classic">클래식 · 체급 대결</button>
+      </div>
     </div>
     ${
       isSolo
@@ -995,6 +1027,26 @@ function renderRoom(): void {
       });
       mapGrid.append(card);
     }
+  }
+  // 2026-08-25: 인라인 게임 모드 선택 — 아이템 배틀 / 클래식(체급 대결)
+  const modeRow = content.querySelector<HTMLElement>('#waiting-mode');
+  if (modeRow) {
+    const paintGameMode = (): void => {
+      modeRow.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+        b.classList.toggle('selected', (b.dataset.gmode ?? 'items') === gameMode);
+      });
+    };
+    paintGameMode();
+    modeRow.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        gameMode = btn.dataset.gmode === 'classic' ? 'classic' : 'items';
+        paintGameMode();
+        if (!isSolo && isCreate) {
+          publishCurrentRoom();
+          net?.setMode(gameMode);
+        }
+      });
+    });
   }
   const wishRow = content.querySelector<HTMLElement>('#waiting-wish');
   const applyWish = (wish: RoleWish): void => {
@@ -1141,6 +1193,7 @@ function renderRoom(): void {
         profile.lastRoomCode = client.code; // 2026-08-25: 재연결용 보존
         roomJoined = true;
         profile.mapId = client.map as MapId;
+        gameMode = client.mode === 'classic' ? 'classic' : 'items';
         setScreen('room');
       };
       client.join(entered.code);
@@ -1179,11 +1232,17 @@ function renderRoom(): void {
   const copyBtn = content.querySelector<HTMLButtonElement>('#room-copy');
   copyBtn?.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(roomCode);
-      copyBtn.textContent = '복사됨';
+      // 2026-08-25: 코드만이 아니라 초대 링크 전체를 복사 — 받은 사람은 탭 한 번으로 입장
+      await navigator.clipboard.writeText(
+        `${location.origin}${location.pathname}?room=${roomCode}`,
+      );
+      copyBtn.textContent = '초대 링크 복사됨 ✓';
     } catch {
       copyBtn.textContent = roomCode;
     }
+    setTimeout(() => {
+      copyBtn.textContent = '초대 링크 복사';
+    }, 1600);
   });
   backBtn?.addEventListener('click', () => {
     net?.close();
@@ -1215,6 +1274,7 @@ function renderRoom(): void {
         const myRole = client.roles[client.id];
         if (myRole) profile.role = myRole;
         profile.mapId = client.map as MapId;
+        gameMode = client.mode === 'classic' ? 'classic' : 'items';
         matchRoster = client.players.map((p) => ({
           id: p.id === client.id ? 'self' : p.id,
           role: (client.roles[p.id] ?? 'runner') as AssignedRole,
@@ -2533,6 +2593,8 @@ function renderGame(): void {
     halfDepth: mapHalfD,
     // 2026-08-25: 캐릭터 스폰 지점 위에는 아이템이 생기지 않도록 배제
     avoid: [spawnLayout.player, ...spawnLayout.bots].map((p) => ({ x: p.x, z: p.z, r: 1.5 })),
+    // 2026-08-25: 클래식 모드 — 아이템 스폰 자체를 끔
+    enabled: gameMode !== 'classic',
   });
   game.disposers.push(() => itemField.dispose());
   let jellyLeft = 0;
@@ -2647,6 +2709,52 @@ function renderGame(): void {
     magnetVisual.geometry.dispose();
     (magnetVisual.material as THREE.Material).dispose();
   });
+  // 2026-08-25: 원격 아이템 이펙트 — 다른 플레이어의 사용을 내 화면에도 반영
+  let remoteFogLeft = 0;
+  let remoteShieldLeft = 0;
+  let remoteShieldTarget: { mesh: THREE.Mesh } | null = null;
+  let remoteInvisId = '';
+  let remoteInvisUntil = 0;
+  const remoteShieldBubble = new THREE.Mesh(
+    new THREE.SphereGeometry(0.95, 18, 14),
+    new THREE.MeshBasicMaterial({
+      color: 0x7dffb0,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+    }),
+  );
+  remoteShieldBubble.visible = false;
+  ctx.scene.add(remoteShieldBubble);
+  const burstMesh = new THREE.Mesh(
+    new THREE.RingGeometry(0.3, 0.5, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  burstMesh.rotation.x = -Math.PI / 2;
+  burstMesh.position.y = 0.15;
+  ctx.scene.add(burstMesh);
+  let burstT = -1;
+  const spawnItemBurst = (pos: THREE.Vector3, kind: string): void => {
+    burstMesh.position.set(pos.x, 0.15, pos.z);
+    (burstMesh.material as THREE.MeshBasicMaterial).color.setHex(
+      ITEM_META[kind as ItemKind]?.color ?? 0xffffff,
+    );
+    burstT = 0;
+  };
+  game.disposers.push(() => {
+    ctx.scene.remove(remoteShieldBubble);
+    ctx.scene.remove(burstMesh);
+    remoteShieldBubble.geometry.dispose();
+    (remoteShieldBubble.material as THREE.Material).dispose();
+    burstMesh.geometry.dispose();
+    (burstMesh.material as THREE.Material).dispose();
+  });
   const removeDecoy = (): void => {
     decoyMesh.visible = false;
     decoyDir.set(0, 0, 0);
@@ -2740,10 +2848,13 @@ function renderGame(): void {
     } else if (kind === 'sticky') {
       itemField.dropSticky(selfMesh.position.x, selfMesh.position.z);
     }
+    // 2026-08-25: 멀티플레이 — 내 아이템 사용을 다른 플레이어에게 릴레이
+    if (matchEntry === 'room') net?.sendUse(kind);
     if (sound) sound.playBoost();
     paintItemSlot();
   };
   const tryUseItem = (): void => {
+    if (gameMode === 'classic') return;
     if (roundState !== 'playing' || game.out) return;
     const kind = itemField.useHeld();
     if (kind) applyItem(kind);
@@ -3205,6 +3316,8 @@ function renderGame(): void {
   itemSlot.className = 'item-slot';
   itemSlot.setAttribute('aria-label', '아이템 사용');
   wrap.appendChild(itemSlot);
+  // 2026-08-25: 클래식 모드 — 아이템 슬롯 자체를 노출하지 않음
+  if (gameMode === 'classic') itemSlot.style.display = 'none';
   function paintItemSlot(): void {
     const held = itemField.bag.held;
     if (!held) {
@@ -3305,6 +3418,27 @@ function renderGame(): void {
   game.disposers.push(() => window.clearInterval(netSyncTimer));
 
   if (matchEntry === 'room' && net) {
+    // 2026-08-25: 원격 아이템 사용 수신 — 내 화면에도 이펙트 반영
+    net.onUse = (id, kind) => {
+      if (id === net?.id) return;
+      const bot = bots.find((b) => b.kind === 'remote' && b.id === id);
+      spawnItemBurst(bot ? bot.mesh.position : selfMesh.position, kind);
+      if (kind === 'smoke' && isTagger) {
+        // 상대 러너의 연막 — 술래 화면을 안개로 덮는다
+        smokeFog.classList.add('on');
+        remoteFogLeft = GAME.itemSmokeDuration;
+      }
+      if (kind === 'invis' && bot) {
+        bot.mesh.visible = false;
+        remoteInvisId = id;
+        remoteInvisUntil = performance.now() + GAME.itemInvisDuration * 1000;
+      }
+      if (kind === 'shield' && bot) {
+        remoteShieldTarget = bot;
+        remoteShieldLeft = GAME.itemShieldDuration;
+        remoteShieldBubble.visible = true;
+      }
+    };
     net.onCaught = (id) => {
       if (id === net?.id) {
         showResult('tagger', '술래에게 잡혔습니다');
@@ -3590,6 +3724,16 @@ function renderGame(): void {
       magnetVisual.visible = false;
       shieldVisual.visible = false;
       taggerAI?.setInverted(false);
+      // 2026-08-25: 원격 이펙트도 라운드 종료와 함께 정리
+      remoteFogLeft = 0;
+      remoteShieldLeft = 0;
+      remoteShieldBubble.visible = false;
+      remoteShieldTarget = null;
+      if (remoteInvisId) {
+        const hiddenBot = bots.find((b) => b.kind === 'remote' && b.id === remoteInvisId);
+        if (hiddenBot) hiddenBot.mesh.visible = true;
+        remoteInvisId = '';
+      }
       return;
     }
 
@@ -3853,6 +3997,36 @@ function renderGame(): void {
           decoyMesh.rotation.y += effectiveDt * 2;
         }
         if (decoyLeft <= 0) removeDecoy();
+      }
+      // 2026-08-25: 원격 아이템 이펙트 갱신
+      if (remoteFogLeft > 0) {
+        remoteFogLeft = Math.max(0, remoteFogLeft - effectiveDt);
+        if (remoteFogLeft <= 0) smokeFog.classList.remove('on');
+      }
+      if (remoteShieldLeft > 0) {
+        remoteShieldLeft = Math.max(0, remoteShieldLeft - effectiveDt);
+        if (remoteShieldTarget) remoteShieldBubble.position.copy(remoteShieldTarget.mesh.position);
+        if (remoteShieldLeft <= 0) {
+          remoteShieldBubble.visible = false;
+          remoteShieldTarget = null;
+        }
+      }
+      if (remoteInvisId && performance.now() > remoteInvisUntil) {
+        const hiddenBot = bots.find((b) => b.kind === 'remote' && b.id === remoteInvisId);
+        if (hiddenBot) hiddenBot.mesh.visible = true;
+        remoteInvisId = '';
+      }
+      if (burstT >= 0) {
+        burstT += effectiveDt;
+        burstMesh.scale.setScalar(1 + burstT * 6);
+        (burstMesh.material as THREE.MeshBasicMaterial).opacity = Math.max(
+          0,
+          0.7 * (1 - burstT / 0.6),
+        );
+        if (burstT > 0.6) {
+          (burstMesh.material as THREE.MeshBasicMaterial).opacity = 0;
+          burstT = -1;
+        }
       }
       const playerSlow = itemField.isInSticky(selfMesh.position.x, selfMesh.position.z);
       // 2026-08-25: 속도 우선순위 — 끈끈이 < 젤리 < 로켓(2배)

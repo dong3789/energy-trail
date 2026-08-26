@@ -40,6 +40,7 @@ export class NetClient {
   code = '';
   hostId = '';
   map = 'park';
+  mode = 'items';
   phase = 'lobby';
   players: NetPlayerInfo[] = [];
   peers = new Map<string, NetPeer>();
@@ -56,6 +57,7 @@ export class NetClient {
   onRoom: ((c: NetClient) => void) | null = null;
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
+  onUse: ((id: string, kind: string) => void) | null = null;
   /** 2026-08-25: 부활됨 (id, x, z, invulnUntil) — 메인 루프에서 위치 텔레포트 + 무적 적용 */
   onRevived: ((p: { id: string; x: number; z: number; invulnUntil: number }) => void) | null = null;
   /** 2026-08-25: 살리기 실패 (사유) — UI 피드백 */
@@ -135,6 +137,10 @@ export class NetClient {
     this.send({ t: 'map', map });
   }
 
+  setMode(mode: 'items' | 'classic'): void {
+    this.send({ t: 'mode', mode });
+  }
+
   start(): void {
     this.send({ t: 'start' });
   }
@@ -150,6 +156,10 @@ export class NetClient {
 
   sendCatch(id: string): void {
     this.send({ t: 'catch', id });
+  }
+
+  sendUse(kind: string): void {
+    this.send({ t: 'use', kind });
   }
 
   /** 2026-08-25: 살리기 요청 — 서버가 score/거리/시간 검증 후 응답 */
@@ -205,6 +215,7 @@ export class NetClient {
       this.code = String(msg.code || '');
       this.hostId = String(msg.hostId || '');
       this.map = String(msg.map || this.map);
+      this.mode = String(msg.mode || this.mode);
       this.phase = String(msg.phase || 'lobby');
       this.players = Array.isArray(msg.players) ? (msg.players as NetPlayerInfo[]) : [];
       this.onRoom?.(this);
@@ -224,6 +235,7 @@ export class NetClient {
       // 2026-08-25: lastLeftSec도 라운드 시작 시 roundSeconds로 리셋
       // (이전 라운드 left 값이 새 라운드에 잔존하는 것 방지)
       if (typeof msg.roundSeconds === 'number') this.lastLeftSec = msg.roundSeconds;
+      this.mode = String(msg.mode || this.mode);
       this.phase = 'playing';
       this.onStart?.(this);
     }
@@ -237,6 +249,7 @@ export class NetClient {
     }
     if (t === 'score' && typeof msg.n === 'number') this.score = msg.n;
     if (t === 'caught' && typeof msg.id === 'string') this.onCaught?.(msg.id);
+    if (t === 'use' && typeof msg.id === 'string') this.onUse?.(msg.id, String(msg.kind || ''));
     // 2026-08-25: 부활됨 — 위치 텔레포트 + 무적 적용
     if (t === 'revived' && typeof msg.id === 'string') {
       const inv = typeof msg.invulnUntil === 'number' ? msg.invulnUntil : 0;
