@@ -1516,6 +1516,104 @@ input.invalid {
   pointer-events: none;
 }
 
+/* 2026-08-25: 살리기 (Revive) 버튼 — 도망자가 OUT된 동료를 부활 (자국 3개 사용) */
+/* 얼림 버튼과 같은 위치 패턴이지만 따뜻한 핑크/옐로 액센트로 "살린다" 느낌 */
+.revive-wrap {
+  position: absolute;
+  left: 16px;
+  bottom: 116px; /* 얼림 버튼(상단) 위쪽에 살짝 띄움 */
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+}
+.revive-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 92px;
+  min-height: 52px;
+  padding: 8px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 192, 203, 0.35);
+  background: linear-gradient(180deg, rgba(255, 192, 203, 0.18), rgba(255, 90, 138, 0.22));
+  color: #fff;
+  font:
+    600 13px 'Nunito',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  overflow: hidden;
+  transition:
+    transform 0.08s ease,
+    background 0.15s ease;
+}
+.revive-btn:active {
+  transform: scale(0.96);
+}
+.revive-btn.holding {
+  background: linear-gradient(180deg, rgba(255, 90, 138, 0.45), rgba(255, 192, 203, 0.35));
+  border-color: rgba(255, 90, 138, 0.7);
+}
+.revive-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.revive-btn-label {
+  position: relative;
+  z-index: 1;
+}
+.revive-btn-hint {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+/* 홀드 진행 바 (버튼 안쪽 하단) */
+.revive-bar {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+.revive-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #ffe14a, #ff85a2);
+  transition: width 0.05s linear;
+}
+.revive-status {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(8, 11, 22, 0.72);
+  border: 1px solid rgba(255, 192, 203, 0.25);
+  color: #ffd1da;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  max-width: 200px;
+}
+
 @media (max-width: 640px) {
   .ice-btn {
     min-width: 84px;
@@ -1803,8 +1901,9 @@ input.invalid {
 
 .item-slot {
   position: absolute;
-  left: max(16px, env(safe-area-inset-left));
-  bottom: 96px;
+  /* 2026-08-25: 오른손 액션 버튼 — 왼손은 이동 전용. 좌측 얼림 버튼의 대칭 위치 */
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
   min-width: 88px;
   min-height: 64px;
   padding: 8px 12px;
@@ -4313,4 +4412,73 @@ input.invalid {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
   }
+}
+
+/* 2026-08-25: 연막 전면 안개 오버레이 — 화면을 거의 불투명하게 뒤덮음.
+   입력은 pointer-events: none 으로 통과, HUD(z-index 2+)는 안개 위에 유지 */
+.smoke-fog {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  background:
+    radial-gradient(60% 55% at 22% 30%, rgba(196, 176, 212, 0.96) 0%, rgba(196, 176, 212, 0) 70%),
+    radial-gradient(55% 50% at 75% 25%, rgba(232, 224, 240, 0.96) 0%, rgba(232, 224, 240, 0) 70%),
+    radial-gradient(65% 60% at 55% 78%, rgba(155, 89, 182, 0.88) 0%, rgba(155, 89, 182, 0) 72%),
+    linear-gradient(180deg, rgba(222, 210, 234, 0.98) 0%, rgba(206, 190, 224, 0.98) 100%);
+}
+
+.smoke-fog.on {
+  opacity: 0.95;
+  transition: opacity 0.4s ease-out;
+  animation: smoke-fog-drift 9s ease-in-out infinite alternate;
+}
+
+@keyframes smoke-fog-drift {
+  from {
+    transform: scale(1.02) translate(0.5%, -0.4%);
+  }
+  to {
+    transform: scale(1.07) translate(-0.7%, 0.5%);
+  }
+}
+
+/* 2026-08-25: 자동 재연결 오버레이 — 멀티플레이 끊김 시 부드러운 복구 UX */
+.reconnect-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(8, 11, 22, 0.78);
+  backdrop-filter: blur(2px);
+  color: #fff;
+  text-align: center;
+  padding: 24px;
+}
+.reconnect-eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: #ffd1da;
+  text-transform: uppercase;
+}
+.reconnect-msg {
+  font-size: 18px;
+  font-weight: 700;
+  max-width: 360px;
+}
+.reconnect-countdown {
+  font-size: 14px;
+  color: #aab6d3;
+  letter-spacing: 0.04em;
+  min-height: 1.2em;
+}
+.reconnect-overlay .button {
+  margin-top: 8px;
+  min-width: 200px;
 }

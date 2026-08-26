@@ -307,5 +307,15 @@ export class PlayerController {
     this.inputTarget.removeEventListener('keydown', this.keyDownHandler as EventListener);
     this.inputTarget.removeEventListener('keyup', this.keyUpHandler as EventListener);
     this.inputTarget.removeEventListener('keydown', this.keyDownSpeedHandler as EventListener);
+    // 2026-08-25: mesh가 외부 소유지만 dispose는 PlayerController가 호출되므로
+    // 여기서 GPU 자원도 함께 해제. 라운드 재시작마다 새 mesh가 만들어지므로
+    // 해제 안 하면 CapsuleGeometry/Material이 누적됨.
+    const m = this.mesh;
+    if (m) {
+      m.geometry?.dispose();
+      const mat = m.material;
+      if (Array.isArray(mat)) mat.forEach((mm) => mm.dispose());
+      else mat?.dispose();
+    }
   }
 }

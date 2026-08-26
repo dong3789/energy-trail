@@ -438,8 +438,12 @@ export const GAME = {
   trailPoolSize: 140, // 자국 오브젝트 풀 초기 크기
 
   // 흡수 (Phase B+ 확장 자리)
-  // 2026-08-25: 자동 수집 — E 키/탭 불필요, 자국 반경 내 1초 정지 시 자동 완료
-  absorbSeconds: 1.0,
+  // 2026-08-25: 자동 수집 — E 키/탭 불필요, 자국 반경 내 진입 시 자동 시작
+  // 2026-08-25 v2: 즉시 흡수 — 1초 hold 제거. 자국에 닿는 순간 그 프레임에 complete.
+  //                 0 이면 instant 모드 (absorbing 상태 자체를 바이패스).
+  //                 양수면 N 초 hold (이전 동작, 필요시 되돌릴 수 있도록 상수만 유지).
+  absorbSeconds: 0,
+  absorbCooldownSeconds: 4.0, // instant 모드에서 흡수 후 다음 흡수까지 대기
   absorbRadius: 2.0, // 픽업 반경 (m) — 기존 하드코딩 1.5 → 2.0 으로 완화
   boostSeconds: 4.0,
   // 2026-08-15 v5: 1.6 → 1.4 — 도망자 너무 빠르면 술래 못 잡음
@@ -524,7 +528,34 @@ export const GAME = {
   itemJellySpeedMul: 1.55,
   itemSmokeDuration: 5.5,
   itemSmokeForgetSeconds: 1.4,
+  // 2026-08-25: 신규 아이템 7종 — 자석/방어막/대시/분신/반전/로켓/투명
+  itemMagnetDuration: 6,
+  itemMagnetRadius: 7,
+  itemShieldDuration: 8,
+  itemDashDistance: 6,
+  itemDecoyDuration: 6,
+  itemDecoySpeed: 4.2,
+  itemReversalDuration: 4,
+  itemRocketDuration: 3,
+  itemRocketSpeedMul: 2.0,
+  itemInvisDuration: 5,
   itemStickyDuration: 5.0,
   itemStickyRadius: 2.4,
   itemStickySlowMul: 0.45,
+
+  // 2026-08-25: 동료 살리기 (Revive) — 자국 3개를 써서 OUT된 도망자를 가장자리로 부활
+  // - 승리용 자국을 깎아서 살리면 밸런스 안 깨진다 (4번 살리면 사실상 승리 루트 포기)
+  // - 시체 위치가 아닌 가장자리 → 술래 위에 던지지 않게
+  // - 1.5초 홀드 → 흡수(즉시)보다 살짝 위험하게
+  // - 부활 무적 1초 → 흡수 무적(2초)보다 약하게 (전투 리셋 아님)
+  // - 마지막 10초 불가 → 종료 직전 무한 리셋 방지
+  // - 사람 도망자만 (AI 살리기 금지) — 솔로/AI전도 비활성
+  // - 술래 승 조건: 동시 다운 2명 (taggerWinOutCount 2 활용)
+  reviveEnabled: true,
+  reviveTrailCost: 3,
+  reviveHoldSeconds: 1.5,
+  reviveInvulnerabilitySeconds: 1.0,
+  reviveNoLastSeconds: 10.0, // 남은 시간 ≤ 10초면 불가
+  reviveRange: 3.5, // 살리는 쪽 → 시체까지 최대 거리 (m)
+  reviveEdgeMargin: 3.0, // 가장자리 스폰 마진 (맵 가장안쪽 좌/우/위/아래로부터 m)
 } as const;

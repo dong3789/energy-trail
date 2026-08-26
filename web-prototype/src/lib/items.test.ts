@@ -1,11 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ITEM_KINDS,
+  ITEM_META,
   ItemBag,
   nearestGroundItem,
   pointHitsObstacle,
   pickClearPoint,
   type GroundItem,
 } from './items';
+
+describe('item catalog', () => {
+  it('모든 아이템 종류에 메타가 있고 라벨/이모지/힌트가 비어있지 않다', () => {
+    for (const kind of ITEM_KINDS) {
+      const meta = ITEM_META[kind];
+      expect(meta, `${kind} 메타 누락`).toBeDefined();
+      expect(meta.label.length).toBeGreaterThan(0);
+      expect(meta.emoji.length).toBeGreaterThan(0);
+      expect(meta.hint.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('아이템은 중복 없는 10종이다', () => {
+    expect(new Set(ITEM_KINDS).size).toBe(ITEM_KINDS.length);
+    expect(ITEM_KINDS).toHaveLength(10);
+  });
+});
 
 describe('ItemBag', () => {
   it('빈 가방에 줍으면 들고, 쓰면 비운다', () => {

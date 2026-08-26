@@ -18,6 +18,8 @@ export interface NetPeer {
   yaw: number;
   out: boolean;
   role: string;
+  /** 2026-08-25: 부활 무적 (reviveInvulnerabilitySeconds) — 0이면 무적 아님 */
+  invulnUntil?: number;
 }
 
 export interface NetHello {
@@ -44,12 +46,20 @@ export class NetClient {
   roles: Record<string, NetRole> = {};
   spawns: Record<string, { x: number; z: number }> = {};
   score = 0;
+  /** 2026-08-25: 서버 roundStartedAt (epoch ms) — start 메시지에서 수신. */
+  roundStartedAt = 0;
+  /** 2026-08-25: 마지막으로 받은 서버 left(초, 올림) — 카운트다운 drift 보정. */
+  lastLeftSec = -1;
   connected = false;
   lastError = '';
   private pending: Array<(ok: boolean) => void> = [];
   onRoom: ((c: NetClient) => void) | null = null;
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
+  /** 2026-08-25: 부활됨 (id, x, z, invulnUntil) — 메인 루프에서 위치 텔레포트 + 무적 적용 */
+  onRevived: ((p: { id: string; x: number; z: number; invulnUntil: number }) => void) | null = null;
+  /** 2026-08-25: 살리기 실패 (사유) — UI 피드백 */
+  onReviveDenied: ((reason: string) => void) | null = null;
   onEnd: ((winner: NetRole, reason: string) => void) | null = null;
   onLobby: ((c: NetClient) => void) | null = null;
   onError: ((msg: string) => void) | null = null;
@@ -134,11 +144,17 @@ export class NetClient {
   }
 
   sendScore(): void {
-    this.send({ t: 'score' });
+    // 2026-08-25: 서버가 n(유한한 숫자)을 필수 검증 — NaN 주입 차단. 미전송 시 점수가 무시된다.
+    this.send({ t: 'score', n: 1 });
   }
 
   sendCatch(id: string): void {
     this.send({ t: 'catch', id });
+  }
+
+  /** 2026-08-25: 살리기 요청 — 서버가 score/거리/시간 검증 후 응답 */
+  sendRevive(targetId: string): void {
+    this.send({ t: 'revive', id: targetId });
   }
 
   close(): void {
@@ -165,6 +181,17 @@ export class NetClient {
     } catch {
       return;
     }
+    // 2026-08-25: 메시지 처리 throw 격리 — 한 메시지의 버그가 ws 큐의
+    // 나머지 메시지 처리를 막거나 onDisconnect 같은 상태 변경을 누락시키지 않도록.
+    // onCaught/onRevived 같은 콜백 throw도 포함.
+    try {
+      this.processMessage(msg);
+    } catch (err) {
+      console.error('[net.handle] processMessage threw:', err, msg);
+    }
+  }
+
+  private processMessage(msg: Record<string, unknown>): void {
     const t = msg.t;
     if (t === 'welcome' && typeof msg.id === 'string') this.id = msg.id;
     if (t === 'err' && typeof msg.msg === 'string') {
@@ -193,17 +220,35 @@ export class NetClient {
           ? (msg.spawns as Record<string, { x: number; z: number }>)
           : {};
       this.map = String(msg.map || this.map);
+      this.roundStartedAt = typeof msg.roundStartedAt === 'number' ? msg.roundStartedAt : 0;
+      // 2026-08-25: lastLeftSec도 라운드 시작 시 roundSeconds로 리셋
+      // (이전 라운드 left 값이 새 라운드에 잔존하는 것 방지)
+      if (typeof msg.roundSeconds === 'number') this.lastLeftSec = msg.roundSeconds;
       this.phase = 'playing';
       this.onStart?.(this);
     }
     if (t === 'peers' && Array.isArray(msg.list)) {
       this.score = typeof msg.score === 'number' ? msg.score : this.score;
+      // 2026-08-25: 서버 roundSeconds 기준 남은 시간(초, 올림) — 클라 카운트다운
+      // drift를 매 peers broadcast마다 보정. roundTime - dt로 흐르는 클라 자체
+      // 시계가 RAF/탭 백그라운드로 어긋날 수 있어 서버 권위 값으로 동기화.
+      this.lastLeftSec = typeof msg.left === 'number' ? msg.left : this.lastLeftSec;
       for (const row of msg.list as NetPeer[]) this.peers.set(row.id, row);
     }
     if (t === 'score' && typeof msg.n === 'number') this.score = msg.n;
     if (t === 'caught' && typeof msg.id === 'string') this.onCaught?.(msg.id);
+    // 2026-08-25: 부활됨 — 위치 텔레포트 + 무적 적용
+    if (t === 'revived' && typeof msg.id === 'string') {
+      const inv = typeof msg.invulnUntil === 'number' ? msg.invulnUntil : 0;
+      const x = typeof msg.x === 'number' ? msg.x : 0;
+      const z = typeof msg.z === 'number' ? msg.z : 0;
+      this.onRevived?.({ id: msg.id, x, z, invulnUntil: inv });
+    }
+    // 2026-08-25: 살리기 거부 — 사유를 그대로 클라에 통보
+    if (t === 'reviveDenied' && typeof msg.reason === 'string') this.onReviveDenied?.(msg.reason);
     if (t === 'end') {
       this.phase = 'ended';
+      this.lastLeftSec = 0; // 2026-08-25: 라운드 종료 — 다음 라운드 시작 전까지 보정 무력화
       this.onEnd?.((msg.winner as NetRole) || 'tagger', String(msg.reason || ''));
     }
   }
