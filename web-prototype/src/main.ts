@@ -257,6 +257,8 @@ let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
 let roomJoined = true;
 let matchEntry: MatchEntryMode = 'solo';
+// 2026-08-25: 클래식 모드 — 아이템 없이 체급(순수 실력)으로만 하는 모드
+let gameMode: 'items' | 'classic' = 'items';
 let net: NetClient | null = null;
 // 2026-08-25: 자동 재연결 상태 — 끊김 시 카운트다운 UI가 활성인지.
 // 활성 중 사용자가 cancel 누르면 즉시 로비로 보냄.
@@ -905,6 +907,13 @@ function renderRoom(): void {
       <div class="room-map-section-label">맵 선택</div>
       <div class="room-map-grid" id="room-map-grid"></div>
     </div>
+    <div class="room-mode-section">
+      <div class="room-map-section-label">게임 모드</div>
+      <div class="waiting-wish" id="waiting-mode">
+        <button type="button" class="waiting-wish-btn" data-gmode="items">아이템 배틀</button>
+        <button type="button" class="waiting-wish-btn" data-gmode="classic">클래식 · 체급 대결</button>
+      </div>
+    </div>
     ${
       isSolo
         ? `<div class="waiting-ai-section">
@@ -995,6 +1004,26 @@ function renderRoom(): void {
       });
       mapGrid.append(card);
     }
+  }
+  // 2026-08-25: 인라인 게임 모드 선택 — 아이템 배틀 / 클래식(체급 대결)
+  const modeRow = content.querySelector<HTMLElement>('#waiting-mode');
+  if (modeRow) {
+    const paintGameMode = (): void => {
+      modeRow.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+        b.classList.toggle('selected', (b.dataset.gmode ?? 'items') === gameMode);
+      });
+    };
+    paintGameMode();
+    modeRow.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        gameMode = btn.dataset.gmode === 'classic' ? 'classic' : 'items';
+        paintGameMode();
+        if (!isSolo && isCreate) {
+          publishCurrentRoom();
+          net?.setMode(gameMode);
+        }
+      });
+    });
   }
   const wishRow = content.querySelector<HTMLElement>('#waiting-wish');
   const applyWish = (wish: RoleWish): void => {
@@ -1141,6 +1170,7 @@ function renderRoom(): void {
         profile.lastRoomCode = client.code; // 2026-08-25: 재연결용 보존
         roomJoined = true;
         profile.mapId = client.map as MapId;
+        gameMode = client.mode === 'classic' ? 'classic' : 'items';
         setScreen('room');
       };
       client.join(entered.code);
@@ -1215,6 +1245,7 @@ function renderRoom(): void {
         const myRole = client.roles[client.id];
         if (myRole) profile.role = myRole;
         profile.mapId = client.map as MapId;
+        gameMode = client.mode === 'classic' ? 'classic' : 'items';
         matchRoster = client.players.map((p) => ({
           id: p.id === client.id ? 'self' : p.id,
           role: (client.roles[p.id] ?? 'runner') as AssignedRole,
@@ -2533,6 +2564,8 @@ function renderGame(): void {
     halfDepth: mapHalfD,
     // 2026-08-25: 캐릭터 스폰 지점 위에는 아이템이 생기지 않도록 배제
     avoid: [spawnLayout.player, ...spawnLayout.bots].map((p) => ({ x: p.x, z: p.z, r: 1.5 })),
+    // 2026-08-25: 클래식 모드 — 아이템 스폰 자체를 끔
+    enabled: gameMode !== 'classic',
   });
   game.disposers.push(() => itemField.dispose());
   let jellyLeft = 0;
@@ -2744,6 +2777,7 @@ function renderGame(): void {
     paintItemSlot();
   };
   const tryUseItem = (): void => {
+    if (gameMode === 'classic') return;
     if (roundState !== 'playing' || game.out) return;
     const kind = itemField.useHeld();
     if (kind) applyItem(kind);
@@ -3205,6 +3239,8 @@ function renderGame(): void {
   itemSlot.className = 'item-slot';
   itemSlot.setAttribute('aria-label', '아이템 사용');
   wrap.appendChild(itemSlot);
+  // 2026-08-25: 클래식 모드 — 아이템 슬롯 자체를 노출하지 않음
+  if (gameMode === 'classic') itemSlot.style.display = 'none';
   function paintItemSlot(): void {
     const held = itemField.bag.held;
     if (!held) {

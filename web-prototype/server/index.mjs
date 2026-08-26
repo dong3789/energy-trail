@@ -33,7 +33,7 @@ process.on('unhandledRejection', (err) => {
 });
 
 /** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number }} Player */
-/** @typedef {{ code: string, hostId: string, map: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number> }} Room */
+/** @typedef {{ code: string, hostId: string, map: string, mode: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number> }} Room */
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
@@ -65,7 +65,7 @@ function publicPlayers(room) {
 }
 
 function roomPayload(room) {
-  return { t: 'room', code: room.code, hostId: room.hostId, map: room.map, phase: room.phase, players: publicPlayers(room) };
+  return { t: 'room', code: room.code, hostId: room.hostId, map: room.map, mode: room.mode, phase: room.phase, players: publicPlayers(room) };
 }
 
 function genCode() {
@@ -331,6 +331,7 @@ wss.on('connection', (ws) => {
         code,
         hostId: player.id,
         map: typeof msg.map === 'string' ? msg.map : 'park',
+        mode: 'items',
         phase: 'lobby',
         players: new Map([[player.id, player]]),
         roles: {},
@@ -377,6 +378,12 @@ wss.on('connection', (ws) => {
       broadcast(room, roomPayload(room));
       return;
     }
+    // 2026-08-25: 게임 모드 — items(아이템 배틀) / classic(체급 대결). 호스트만 변경.
+    if (t === 'mode' && typeof msg.mode === 'string' && room.hostId === player.id && room.phase === 'lobby') {
+      room.mode = msg.mode === 'classic' ? 'classic' : 'items';
+      broadcast(room, roomPayload(room));
+      return;
+    }
     if (t === 'start' && room.hostId === player.id && (room.phase === 'lobby' || room.phase === 'ended')) {
       room.roles = assignRoles([...room.players.values()]);
       for (const p of room.players.values()) {
@@ -392,6 +399,7 @@ wss.on('connection', (ws) => {
         t: 'start',
         roles: room.roles,
         map: room.map,
+        mode: room.mode,
         players: publicPlayers(room),
         spawns,
         roundSeconds: ROUND_SECONDS,
