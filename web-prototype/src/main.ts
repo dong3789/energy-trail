@@ -1359,8 +1359,9 @@ function renderGame(): void {
   };
   const CAM_LIMITS = {
     // 2026-08-15 v2: 0.005/0.004 → 0.0028/0.0023 — 드래그 감도 ↓ (확확 넘어감 방지)
+    // 2026-08-26: 0.0028 → 0.005 — 시야 회전 더 빠르게 (갑갑함 개선)
     // + smoothing (CAM_ROT_SMOOTHING) 동시 적용
-    yawSpeed: 0.0028,
+    yawSpeed: 0.005,
     pitchSpeed: 0.0023,
     pitchMin: -0.35,
     pitchMax: 0.85,

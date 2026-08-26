@@ -3,8 +3,8 @@
 export const LOOK_STICK = {
   maxRadius: 64,
   deadzone: 0.14,
-  /** Full-stick yaw, rad/s — a 1s hold turns ~72°. */
-  yawRate: 1.25,
+  /** Full-stick yaw, rad/s — a 1s hold turns ~143° (2026-08-26: 1.25 → 2.5, 갑갑함 개선). */
+  yawRate: 2.5,
   pitchRate: 0.85,
 } as const;
 
