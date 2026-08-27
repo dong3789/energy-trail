@@ -20,6 +20,9 @@ const REVIVE_INVULNERABLE_SECONDS = 1.0; // 부활 후 무적
 const REVIVE_EDGE_MARGIN = 3.0; // 가장자리 스폰 마진
 const REVIVE_COOLDOWN_MS = 8000; // 2026-08-25: 같은 대상 재살리기 cooldown — 자국 3개 가치(≈8초)에 맞춰 서버 권위 가드
 const SHIELD_MS = 8000; // 2026-08-25: 방어막 지속시간(클라 itemShieldDuration과 일치) — 서버 권위 catch 차단용
+const ICE_RANGE = 8; // config.ts GAME.iceRange
+const ICE_DURATION_MS = 2400; // GAME.iceDuration
+const ICE_COOLDOWN_MS = 10000; // GAME.iceCooldown
 const SCORE_MIN_INTERVAL_MS = 250; // 2026-08-25: 점수 연타 제한 — 배치 전송 클라이언트 기준
 const SCORE_MAX_ADD = 10; // 2026-08-25: 한 메시지당 최대 가점 (배치 n 클램프)
 
@@ -159,6 +162,7 @@ function placePlayers(room) {
     p.yaw = 0;
     p.invulnUntil = 0;
     p.shieldUntil = 0; // 2026-08-25: 라운드 시작 시 무적 없음
+    p.frozenUntil = 0;
     // 2026-08-25: 동기화용 prev/v 초기화 — 라운드 시작 시 점프 안 나게 velocity 0
     p.prevX = p.x;
     p.prevZ = p.z;
@@ -225,6 +229,7 @@ function resetRoomToLobby(room) {
     p.role = '';
     p.invulnUntil = 0;
     p.shieldUntil = 0; // 2026-08-25: 다음 라운드 위해 무적 초기화
+    p.frozenUntil = 0;
     // 2026-08-25: 동기화용 prev/v 리셋 — 다음 라운드 첫 tick에서 잘못된 Δ거리로 점프 방지
     p.prevX = p.x;
     p.prevZ = p.z;
@@ -286,6 +291,7 @@ function tickPlaying(room) {
         broadcast(room, { t: 'shieldblock', id: run.id });
         continue;
       }
+      if (tag.frozenUntil && tag.frozenUntil > now) continue;
       if (dist(tag, run) <= CATCH_DIST) {
         run.out = true;
         broadcast(room, { t: 'caught', id: run.id });
@@ -518,7 +524,8 @@ wss.on('connection', (ws) => {
         p.role = room.roles[p.id];
         p.out = false;
         p.invulnUntil = 0;
-    p.shieldUntil = 0;
+        p.shieldUntil = 0;
+        p.frozenUntil = 0;
       }
       room.phase = 'playing';
       room.startedAt = Date.now();
@@ -597,7 +604,25 @@ wss.on('connection', (ws) => {
       broadcast(room, { t: 'use', id: player.id, kind: kindUse }, player.id);
       return;
     }
+    if (t === 'ice' && room.phase === 'playing' && player.role === 'runner' && !player.out) {
+      const nowIce = Date.now();
+      if (nowIce - (player.lastIceAt || 0) < ICE_COOLDOWN_MS) return;
+      let tagger = null;
+      for (const p of room.players.values()) {
+        if (p.role === 'tagger') {
+          tagger = p;
+          break;
+        }
+      }
+      if (!tagger) return;
+      if (dist(player, tagger) > ICE_RANGE + 2) return;
+      player.lastIceAt = nowIce;
+      tagger.frozenUntil = nowIce + ICE_DURATION_MS;
+      broadcast(room, { t: 'ice', id: player.id, until: tagger.frozenUntil });
+      return;
+    }
     if (t === 'catch' && room.phase === 'playing' && player.role === 'tagger') {
+      if (player.frozenUntil && player.frozenUntil > Date.now()) return;
       const target = room.players.get(String(msg.id || ''));
       if (
         target &&
