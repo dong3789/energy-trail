@@ -501,8 +501,8 @@ export const GAME = {
   taggerPatrolTurnInterval: 2.5,
 
   // 2026-08-09 v4: 얼림 (Ice) 시스템 — 도망자가 술래를 잠시 동결
-  // 2026-08-15 v5: 1.0 → 1.2 — 도망자가 멀리서도 얼림 발동 가능
-  iceRange: 3.4,
+  // 2026-08-28: 3.4 → 8. 1인칭에선 3.4m가 거의 접촉이라 버튼을 눌러도 조용히 실패함.
+  iceRange: 8,
   iceDuration: 2.4,
   iceCooldown: 10.0,
   iceCatchGraceSeconds: 0.8,

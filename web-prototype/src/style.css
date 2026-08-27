@@ -4152,18 +4152,18 @@ input.invalid {
 }
 
 .game-canvas-wrap.touch-ui .ice-wrap {
-  left: auto;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: max(16px, env(safe-area-inset-bottom));
-  align-items: flex-end;
-  z-index: 16;
+  left: max(8px, env(safe-area-inset-left));
+  right: auto;
+  bottom: calc(10px + env(safe-area-inset-bottom) + 80px);
+  align-items: flex-start;
+  z-index: 20;
 }
 
 .game-canvas-wrap.touch-ui .ice-btn {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  min-height: 52px;
   padding: 0;
   border-radius: 50%;
   flex-direction: column;
@@ -4283,8 +4283,9 @@ input.invalid {
     right: max(10px, env(safe-area-inset-right));
   }
   .game-canvas-wrap.touch-ui .ice-wrap {
-    bottom: max(10px, env(safe-area-inset-bottom));
-    right: max(10px, env(safe-area-inset-right));
+    left: max(10px, env(safe-area-inset-left));
+    right: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom) + 80px);
   }
   .game-canvas-wrap.touch-ui .shot-fire-btn {
     width: 48px;

@@ -2969,6 +2969,8 @@ function renderGame(): void {
     },
     setTaggerFrozen: (frozen) => {
       if (taggerAI) taggerAI.setFrozen(frozen);
+      // 로컬이 술래면 (멀티에서 상대 얼림 수신) 입력도 막음
+      if (isTagger) player.setFrozen(frozen);
     },
     onTaggerVisual: (frozen) => {
       if (!taggerMaterialRef) return;
@@ -2982,19 +2984,30 @@ function renderGame(): void {
     },
   });
 
+  const tryIce = (): void => {
+    if (isTagger) return;
+    if (game.out) return;
+    const dist = distVecToTagger();
+    const deny = ice.denyReason(dist);
+    if (deny === 'range') {
+      sound.playAbsorbCancel();
+      if (iceStatus) iceStatus.textContent = '너무 멀다';
+      if (iceBtn) iceBtn.querySelector('.ice-btn-label')!.textContent = '멀다';
+      return;
+    }
+    if (ice.triggerIfReady(dist)) {
+      sound.playIce();
+      if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
+      roundStats.iceUsed += 1;
+      if (matchEntry === 'room') net?.sendIce();
+    }
+  };
+
   // F 키로 얼림 발동 (도망자만)
   const iceKeyHandler = (e: KeyboardEvent): void => {
     if (e.repeat) return;
     if (e.code !== 'KeyF') return;
-    if (isTagger) return; // 술래는 얼림 사용 불가
-    if (game.out) return;
-    const dist = distVecToTagger();
-    if (ice.triggerIfReady(dist)) {
-      sound.playIce();
-      // 2026-08-15: 술래 위치에 서리 버스트 (얼음 파티클)
-      if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
-      roundStats.iceUsed += 1;
-    }
+    tryIce();
   };
 
   // 2026-08-25: 자동 흡수 — E 키/탭 불필요. 자국 반경 내 진입 시 AbsorbSystem.update() 가
@@ -3280,13 +3293,7 @@ function renderGame(): void {
     iceBtn.className = 'ice-btn';
     iceBtn.innerHTML = `<span class="ice-btn-label">얼림</span><span class="ice-btn-hint">F</span>`;
     iceBtn.addEventListener('click', () => {
-      if (game.out) return;
-      const dist = distVecToTagger();
-      if (ice.triggerIfReady(dist)) {
-        sound.playIce();
-        if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
-        roundStats.iceUsed += 1; // 2026-08-16: 결과 화면 통계
-      }
+      tryIce();
     });
     iceWrap.appendChild(iceBtn);
     iceStatus = document.createElement('div');
@@ -3539,6 +3546,10 @@ function renderGame(): void {
 
   if (matchEntry === 'room' && net) {
     // 2026-08-25: 원격 아이템 사용 수신 — 내 화면에도 이펙트 반영
+    net.onIce = (until) => {
+      if (until > 0 && until < Date.now()) return;
+      ice.triggerIfReady(0);
+    };
     net.onUse = (id, kind) => {
       if (id === net?.id) return;
       const bot = bots.find((b) => b.kind === 'remote' && b.id === id);
@@ -3942,7 +3953,7 @@ function renderGame(): void {
         graceTimeLeft -= dt;
         if (graceTimeLeft <= 0) {
           graceTimeLeft = 0;
-          if (taggerAI && taggerStunLeft <= 0) taggerAI.setFrozen(false);
+          if (taggerAI && taggerStunLeft <= 0 && !ice.isActive()) taggerAI.setFrozen(false);
         }
       }
 
@@ -4272,7 +4283,8 @@ function renderGame(): void {
       }
       if (taggerStunLeft > 0) {
         taggerStunLeft = Math.max(0, taggerStunLeft - effectiveDt);
-        if (taggerStunLeft <= 0 && graceTimeLeft <= 0) taggerAI?.setFrozen(false);
+        if (taggerStunLeft <= 0 && graceTimeLeft <= 0 && !ice.isActive())
+          taggerAI?.setFrozen(false);
       }
       if (taggerAI && smokeLeft <= 0 && decoyLeft > 0 && decoyMesh.visible) {
         // 2026-08-25: 분신 활성 — AI 술래는 무조건 분신만 쫓는다
@@ -4700,10 +4712,11 @@ function renderGame(): void {
         iceBtn.querySelector('.ice-btn-label')!.textContent =
           `쿨다운 ${ice.getCooldown().toFixed(1)}s`;
       } else {
+        const near = ice.inRange(distVecToTagger());
         iceBtn.classList.remove('frozen', 'cooldown');
-        iceBtn.classList.add('ready');
+        iceBtn.classList.toggle('ready', near);
         iceBtn.disabled = false;
-        iceBtn.querySelector('.ice-btn-label')!.textContent = '얼림';
+        iceBtn.querySelector('.ice-btn-label')!.textContent = near ? '얼림' : '멀다';
       }
     }
     if (iceStatus) {

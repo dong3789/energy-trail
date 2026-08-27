@@ -31,11 +31,20 @@ export class IceSystem {
     this.onTaggerVisual = opts.onTaggerVisual;
   }
 
+  inRange(distToTagger: number): boolean {
+    return Number.isFinite(distToTagger) && distToTagger <= GAME.iceRange;
+  }
+
+  denyReason(distToTagger: number): 'active' | 'cooldown' | 'range' | null {
+    if (this.active) return 'active';
+    if (this.cooldown > 0) return 'cooldown';
+    if (!this.inRange(distToTagger)) return 'range';
+    return null;
+  }
+
   /** 도망자가 술래와 거리 안에 있고 쿨다운이 끝났으면 얼림 발동 */
   triggerIfReady(distToTagger: number): boolean {
-    if (this.active) return false;
-    if (this.cooldown > 0) return false;
-    if (distToTagger > GAME.iceRange) return false;
+    if (this.denyReason(distToTagger)) return false;
 
     this.active = true;
     this.remaining = GAME.iceDuration;
