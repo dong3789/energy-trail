@@ -50,6 +50,18 @@ describe('config invariants', () => {
       expect(SCENE.firstPersonOffsetBack).toBeGreaterThan(PLAYER.radius * 2);
       expect(SCENE.firstPersonOffsetUp).toBeGreaterThan(0.5);
     });
+
+    it('1인칭에서 자기 몸통이 화면을 채우지 않도록 충분히 뒤에 둔다', () => {
+      // 캡슐 높이 1.7m / FOV 90° 기준, 5m 뒤에서 화면 높이의 ~20%
+      expect(SCENE.firstPersonOffsetBack).toBeGreaterThanOrEqual(5);
+      expect(SCENE.firstPersonOffsetUp).toBeGreaterThan(1.5);
+    });
+  });
+
+  describe('PLAYER 라벨', () => {
+    it('자기 닉네임 스프라이트는 1인칭 시야를 가리지 않게 끈다', () => {
+      expect(PLAYER.showSelfLabel).toBe(false);
+    });
   });
 
   describe('GAME 밸런스', () => {

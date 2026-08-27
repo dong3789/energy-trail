@@ -233,10 +233,10 @@ export const SCENE = {
   // - WASD/조이스틱 = 카메라 look (local -Z, face). getWorldDirection(+Z)을 쓰면 앞뒤가 뒤집힘
   // - yaw는 mesh와 동기화 → mesh가 화면 정면에 고정 + 환경이 흐름
   firstPerson: true,
-  // 2026-08-28: 머리 안(0.15/0.05)은 눈·입이 화면을 가리고 시야가 너무 좁음.
-  // 등 뒤 2.2m + 위 1.2m — 자기 등이 작게 보이면서 주변을 더 멀리 봄.
-  firstPersonOffsetBack: 2.2,
-  firstPersonOffsetUp: 1.2,
+  // 2026-08-28: 2.2m는 젤리빈+이름표가 화면을 채움. 등 뒤 5.5m + 위 2.2m —
+  // 자기 몸은 하단의 작은 실루엣, 맵이 넓게 보임.
+  firstPersonOffsetBack: 5.5,
+  firstPersonOffsetUp: 2.2,
   firstPersonYawSpeed: 3.0, // rad/s ≈ 172°/s — ←/→/A/D 누르고 있는 동안 누적
   firstPersonShakeScale: 0.4, // 카메라 셰이크 감쇠 (1인칭은 멀미 줄이기 위해 살짝만)
 } as const;
@@ -396,6 +396,8 @@ export const PLAYER = {
   taggerHoodLightIntensity: 0.0,
   taggerHoodLightDistance: 0.0,
   showPlayerLabels: true,
+  // 1인칭 로컬 시야에서 자기 닉네임 스프라이트(2.4m)는 카메라를 가림 — 남만 표시
+  showSelfLabel: false,
   labelOffsetY: 1.4,
   taggerLabel: '술래',
   runnerLabel: '나',

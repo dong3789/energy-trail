@@ -31,7 +31,7 @@ import { escapeHtml } from './lib/html-escape';
 import { appVersionLabel } from './lib/app-version';
 import { RemotePlayerSync, slerpYaw } from './lib/sync';
 import { countdownFromElapsed, firstCountdownPaint, effectiveElapsedMs } from './lib/countdown';
-import { attachWorldLabel } from './lib/follow-label';
+import { attachWorldLabel, shouldAttachPlayerLabel } from './lib/follow-label';
 import {
   applyFaceDirFromWorldDir,
   chaseYawFromMovement,
@@ -2459,7 +2459,13 @@ function renderGame(): void {
     addCharacterFeatures(mesh, { isTagger: botIsTagger, bodyColor: botColor });
     const remote = net?.players.find((p) => p.id === seat.id);
     const isRemote = Boolean(remote) || liveIds.has(seat.id);
-    if (PLAYER.showPlayerLabels) {
+    if (
+      shouldAttachPlayerLabel({
+        showPlayerLabels: PLAYER.showPlayerLabels,
+        isSelf: false,
+        showSelfLabel: PLAYER.showSelfLabel,
+      })
+    ) {
       addPlayerLabel(
         mesh,
         remote?.name ?? (botIsTagger ? 'AI 술래' : `AI ${i + 1}`),
@@ -2957,7 +2963,14 @@ function renderGame(): void {
   game.absorb = absorb;
 
   // 2026-08-09 v2: 머리 위에 캔버스 라벨 스프라이트
-  if (PLAYER.showPlayerLabels) {
+  // 1인칭에서 자기 닉네임은 시야를 가리므로 붙이지 않음 (남 플레이어만)
+  if (
+    shouldAttachPlayerLabel({
+      showPlayerLabels: PLAYER.showPlayerLabels,
+      isSelf: true,
+      showSelfLabel: PLAYER.showSelfLabel,
+    })
+  ) {
     addPlayerLabel(
       selfMesh,
       selfLabel,

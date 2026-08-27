@@ -4149,6 +4149,14 @@ input.invalid {
   bottom: max(12px, env(safe-area-inset-bottom));
   gap: 6px;
 }
+.game-canvas-wrap.touch-ui .runner-skills .ice-wrap,
+.game-canvas-wrap.touch-ui .runner-skills .revive-wrap {
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  top: auto;
+}
 .game-canvas-wrap.touch-ui .runner-skills .ice-btn,
 .game-canvas-wrap.touch-ui .runner-skills .item-slot,
 .game-canvas-wrap.touch-ui .runner-skills .revive-btn {
