@@ -45,6 +45,11 @@ describe('config invariants', () => {
       expect(SCENE.cameraFovRunner).toBeGreaterThanOrEqual(50);
       expect(SCENE.cameraFovRunner).toBeLessThanOrEqual(100);
     });
+
+    it('1인칭 카메라는 캡슐 머리 안에 들어가지 않는다', () => {
+      expect(SCENE.firstPersonOffsetBack).toBeGreaterThan(PLAYER.radius * 2);
+      expect(SCENE.firstPersonOffsetUp).toBeGreaterThan(0.5);
+    });
   });
 
   describe('GAME 밸런스', () => {
