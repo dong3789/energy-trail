@@ -16,7 +16,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:network-sim": "node scripts/network-sim.mjs"
+    "test:network-sim": "node scripts/network-sim.mjs",
+    "setup:tunnel": "bash ../scripts/setup-tunnel.sh",
+    "verify:domain": "bash ../scripts/verify-domain.sh"
   },
   "dependencies": {
     "three": "^0.178.0",
