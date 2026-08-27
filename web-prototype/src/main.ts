@@ -3660,8 +3660,16 @@ function renderGame(): void {
   // 카메라가 플레이어 등 뒤에서 따라옴. 부드러운 lerp + 미세 호흡감.
   // 초기값을 플레이어 뒤로 즉시 맞춤 (튀는 것 방지)
   if (SCENE.firstPerson) {
-    // 2026-08-27: 1인칭 — 카메라 = mesh 머리, yaw = mesh yaw
-    ctx.camera.position.set(selfMesh.position.x, SCENE.firstPersonHeadHeight, selfMesh.position.z);
+    // 2026-08-27: 1인칭 — 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준), yaw = mesh yaw
+    // - mesh의 뒷모습(머리/어깨)이 정면 시야에 보임 → 자기 위치/방향 인지
+    // - W 이동 시 mesh가 화면 정면에 고정 + 환경이 흐름 → "이동 중" 느낌
+    const _fpFwd = new THREE.Vector3();
+    selfMesh.getWorldDirection(_fpFwd);
+    ctx.camera.position.set(
+      selfMesh.position.x - _fpFwd.x * SCENE.firstPersonOffsetBack,
+      selfMesh.position.y + SCENE.firstPersonOffsetUp,
+      selfMesh.position.z - _fpFwd.z * SCENE.firstPersonOffsetBack,
+    );
     ctx.camera.quaternion.copy(selfMesh.quaternion);
   } else {
     const initialFacing = new THREE.Vector3(0, 0, -1);
@@ -3806,11 +3814,13 @@ function renderGame(): void {
       const snap = applyCountdownFromClock(now);
       if (snap.state === 'playing') {
         if (SCENE.firstPerson) {
-          // 2026-08-27: 1인칭 — 카운트다운 종료 시 카메라를 mesh 머리 위로 스냅
+          // 2026-08-27: 1인칭 — 카운트다운 종료 시 카메라를 mesh 뒤쪽으로 스냅
+          const _fpFwd = new THREE.Vector3();
+          selfMesh.getWorldDirection(_fpFwd);
           ctx.camera.position.set(
-            selfMesh.position.x,
-            SCENE.firstPersonHeadHeight,
-            selfMesh.position.z,
+            selfMesh.position.x - _fpFwd.x * SCENE.firstPersonOffsetBack,
+            selfMesh.position.y + SCENE.firstPersonOffsetUp,
+            selfMesh.position.z - _fpFwd.z * SCENE.firstPersonOffsetBack,
           );
           ctx.camera.quaternion.copy(selfMesh.quaternion);
         } else {
@@ -3844,11 +3854,13 @@ function renderGame(): void {
       desiredFollowPos.y = SCENE.cameraFollowHeight;
 
       if (SCENE.firstPerson) {
-        // 2026-08-27: 1인칭 — 인트로 시네마틱 스윕 없이 mesh 머리에서 시작
+        // 2026-08-27: 1인칭 — 인트로 시네마틱 스윕 없이 mesh 뒤쪽에서 시작
+        const _fpFwd = new THREE.Vector3();
+        selfMesh.getWorldDirection(_fpFwd);
         ctx.camera.position.set(
-          selfMesh.position.x,
-          SCENE.firstPersonHeadHeight,
-          selfMesh.position.z,
+          selfMesh.position.x - _fpFwd.x * SCENE.firstPersonOffsetBack,
+          selfMesh.position.y + SCENE.firstPersonOffsetUp,
+          selfMesh.position.z - _fpFwd.z * SCENE.firstPersonOffsetBack,
         );
         ctx.camera.quaternion.copy(selfMesh.quaternion);
       } else {
@@ -4734,14 +4746,17 @@ function renderGame(): void {
     camState.pitch += (camState.pitchTarget - camState.pitch) * CAM_ROT_SMOOTHING;
 
     if (SCENE.firstPerson) {
-      // 2026-08-27: 1인칭 — 카메라 = mesh 머리, yaw = mesh yaw
+      // 2026-08-27: 1인칭 — 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준), yaw = mesh yaw
       // - PlayerController의 ←/→ 키로 mesh가 회전 → 카메라가 그대로 따라감
-      // - selfMesh가 카메라 위치에 있으니 자기 캐릭터는 화면에 안 보임 (가려짐)
+      // - mesh의 뒷모습(머리/어깨)이 정면 시야에 보임 → 자기 위치/방향 인지
+      // - W 이동 시 mesh가 화면 정면에 고정 + 환경이 흐름 → "이동 중" 느낌
       // - chase camState / lookAhead / 장애물 raycast 모두 우회
+      const _fpFwd = new THREE.Vector3();
+      selfMesh.getWorldDirection(_fpFwd);
       ctx.camera.position.set(
-        selfMesh.position.x,
-        SCENE.firstPersonHeadHeight,
-        selfMesh.position.z,
+        selfMesh.position.x - _fpFwd.x * SCENE.firstPersonOffsetBack,
+        selfMesh.position.y + SCENE.firstPersonOffsetUp,
+        selfMesh.position.z - _fpFwd.z * SCENE.firstPersonOffsetBack,
       );
       ctx.camera.quaternion.copy(selfMesh.quaternion);
       // 카메라 forward = mesh forward (1인칭에서 W = 카메라 forward = mesh forward)
