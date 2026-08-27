@@ -26,7 +26,7 @@ import { DustSystem } from './scene/DustSystem';
 import { SoundManager } from './scene/SoundManager';
 import { AbsorbSystem } from './scene/AbsorbSystem';
 import { ItemField } from './scene/ItemField';
-import { ITEM_META, type ItemKind } from './lib/items';
+import { ITEM_META, magnetTakeCount, type ItemKind } from './lib/items';
 import { escapeHtml } from './lib/html-escape';
 import { appVersionLabel } from './lib/app-version';
 import { RemotePlayerSync, slerpYaw } from './lib/sync';
@@ -2679,6 +2679,7 @@ function renderGame(): void {
   });
   // 2026-08-25: 신규 아이템 상태 — 자석/방어막/반전/로켓/투명/분신
   let magnetLeft = 0;
+  let magnetAbsorbed = 0;
   let shieldLeft = 0;
   let reversalLeft = 0;
   let rocketLeft = 0;
@@ -2854,6 +2855,7 @@ function renderGame(): void {
       chasePrey = undefined;
     } else if (kind === 'magnet') {
       magnetLeft = GAME.itemMagnetDuration;
+      magnetAbsorbed = 0;
       magnetVisual.visible = true;
     } else if (kind === 'shield') {
       shieldLeft = GAME.itemShieldDuration;
@@ -4166,10 +4168,12 @@ function renderGame(): void {
         magnetLeft = Math.max(0, magnetLeft - effectiveDt);
         magnetVisual.position.set(selfMesh.position.x, 0.08, selfMesh.position.z);
         magnetVisual.scale.setScalar(1 + Math.sin(t * 5) * 0.04);
-        // 반경 내 자국 최대 3개/프레임 흡입 — 점수는 일반 흡수와 동일 경로
-        for (let i = 0; i < 3; i++) {
-          if (trails.consumeNearest(selfMesh.position, GAME.itemMagnetRadius) > 0) addTrailScore(1);
-          else break;
+        const take = magnetTakeCount(GAME.itemMagnetMaxAbsorb - magnetAbsorbed, 2);
+        for (let i = 0; i < take; i++) {
+          if (trails.consumeNearest(selfMesh.position, GAME.itemMagnetRadius) > 0) {
+            addTrailScore(1);
+            magnetAbsorbed += 1;
+          } else break;
         }
         if (magnetLeft <= 0) magnetVisual.visible = false;
       }

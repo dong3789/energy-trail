@@ -3,6 +3,7 @@ import {
   ITEM_KINDS,
   ITEM_META,
   ItemBag,
+  magnetTakeCount,
   nearestGroundItem,
   pointHitsObstacle,
   pickClearPoint,
@@ -23,6 +24,15 @@ describe('item catalog', () => {
   it('아이템은 중복 없는 10종이다', () => {
     expect(new Set(ITEM_KINDS).size).toBe(ITEM_KINDS.length);
     expect(ITEM_KINDS).toHaveLength(10);
+  });
+});
+
+describe('magnetTakeCount', () => {
+  it('한 자석당 최대 2개만 가져간다', () => {
+    expect(magnetTakeCount(2, 8)).toBe(2);
+    expect(magnetTakeCount(2, 1)).toBe(1);
+    expect(magnetTakeCount(0, 8)).toBe(0);
+    expect(magnetTakeCount(2, 0)).toBe(0);
   });
 });
 
