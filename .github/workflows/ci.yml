@@ -44,6 +44,9 @@ jobs:
       - name: Test (Vitest, with coverage)
         run: npm run test:coverage
 
+      - name: Build (vite)
+        run: npm run build
+
       - name: Upload coverage to Codecov (optional)
         if: success()
         uses: codecov/codecov-action@v5
@@ -53,9 +56,6 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Build (vite)
-        run: npm run build
-
       - name: Upload build artifacts
         if: success()
         uses: actions/upload-artifact@v4
@@ -63,3 +63,29 @@ jobs:
           name: dist
           path: web-prototype/dist/
           retention-days: 7
+
+  network-sim:
+    name: Network Sim (Jitter/Drop 검증)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: web-prototype
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web-prototype/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Network simulation (4 scenarios)
+        # 2026-08-25: PR마다 jitter/drop 4조건 자동 측정 (baseline/mobile-lte/unstable/extreme-drop)
+        # 로컬과 동일한 검증으로 멀티플레이어 동기화 품질 회귀 방지
+        run: npm run test:network-sim
