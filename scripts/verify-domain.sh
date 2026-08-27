@@ -33,6 +33,8 @@ echo ""
 echo "--- 3. WebSocket 멀티플레이어 (${WS_URL}) ---"
 cd "$(dirname "$0")/../web-prototype"
 
+# 2026-08-25: set -e 일시 해제 — node 실패해도 자동 진단 단계 실행되도록
+set +e
 WS_URL="$WS_URL" node --input-type=module -e "
 import WebSocket from 'ws';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -77,6 +79,7 @@ console.log('');
 console.log('ALL PASS — 도메인 경유 멀티플레이어 정상');
 " 2>&1
 RC=$?
+set -e
 
 echo ""
 echo "--- 4. 자동 진단 (실패 시 힌트) ---"
