@@ -192,11 +192,11 @@ export class PlayerController {
 
     // 2026-08-27: 1인칭 yaw 회전 — ←/→ 누르고 있는 동안 누적
     // - frozen/absorbing이 아닐 때만, 그리고 1인칭일 때만
-    // - ← 누르면 mesh 좌회전 (addYaw -), → 누르면 mesh 우회전 (addYaw +)
-    // - PR #13의 selfMesh.rotation.y = PI로 mesh forward가 +Z가 되면서
-    //   Y축 +회전이 mesh를 +X로 (우회전) 보내게 됨 → 부호 swap으로 직관 복원
+    // - v1 표준: ← = addYaw +, → = addYaw - (mesh 좌/우회전)
+    // - PR #13/14 cycle: rotation.y=PI + yaw swap으로 시도했으나 모바일 charRight
+    //   부호까지 깨져서 다시 v1 표준으로 복원
     if (this.firstPerson) {
-      const yawDelta = (this.yawRight ? 1 : 0) - (this.yawLeft ? 1 : 0);
+      const yawDelta = (this.yawLeft ? 1 : 0) - (this.yawRight ? 1 : 0);
       if (yawDelta !== 0) {
         this.addYaw(yawDelta * SCENE.firstPersonYawSpeed * dt);
       }
