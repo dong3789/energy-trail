@@ -89,6 +89,80 @@ npm run test:network-sim    # 4가지 조건 자동 spawn·측정·assert
 
 서버 측 시뮬레이션은 `SIM_LATENCY_MS / SIM_JITTER_MS / SIM_DROP_RATE` 환경변수로 제어. 프로덕션에서는 절대 켜지 말 것 (모두 기본값 0).
 
+### Docker 운영 셋업 (Mac mini 서빙)
+
+도메인(`trail.yndl.dev`) 노출 + 멀티플레이어 풀스택 운영용. 컨테이너 2개 + Cloudflare Tunnel로 외부 접근.
+
+```
+[인터넷] → Cloudflare → cloudflared (호스트 launchd) → caddy:80 (Docker) → ws:8791 (Docker)
+```
+
+- `Caddyfile` — 정적(dist) 서빙 + `/ws*` 프록시 + `/health` (handle 블록 순서 명시 필수)
+- `docker-compose.yml` — caddy(80/443) + ws(8791) 서비스
+- `web-prototype/Dockerfile` — node:22-alpine, ws 서버만 (caddy가 dist 마운트해 서빙)
+- `~/.cloudflared/config.yml` — 터널 설정 (`<TUNNEL_ID>` 플레이스홀더 → tunnel create로 받은 UUID)
+- `~/Library/LaunchAgents/com.cloudflare.cloudflared.plist` — 재부팅 자동 시작
+
+#### 재부팅 후 재시작 순서 (Mac mini 등)
+
+Docker Desktop과 cloudflared는 launchd에 등록되어 있어 자동으로 켜지지만, **docker 컨테이너는 재시작이 필요합니다**:
+
+```bash
+# 1. Docker Desktop이 살아있는지 확인 (시스템 환경설정에서 "Docker Desktop" 자동 실행 켜두기 권장)
+docker info > /dev/null 2>&1 || open -a Docker && sleep 30
+
+# 2. 컨테이너 재시작
+cd /Users/developer/Desktop/ftp/energy-trail
+docker compose up -d
+
+# 3. cloudflared 확인 (자동 시작돼야 하지만 죽었으면)
+launchctl list | grep cloudflared || launchctl start com.cloudflare.cloudflared
+
+# 4. 검증
+curl http://localhost/health          # → ok
+curl https://trail.yndl.dev/health    # → ok (터널 살아있을 때)
+```
+
+#### 코드 변경 후 반영
+
+```bash
+cd /Users/developer/Desktop/ftp/energy-trail
+
+# 프론트 코드만 변경 → dist만 재빌드, caddy가 호스트 dist를 마운트 중이므로 즉시 반영
+cd web-prototype && npm run build
+
+# 서버 코드 변경 → ws 이미지 재빌드 + 재시작
+docker compose build ws && docker compose up -d ws
+
+# caddy 설정 변경 → reload (재시작 불필요)
+docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile --address localhost:2019
+```
+
+#### Cloudflare Tunnel 셋업 (사용자 1회 인터랙티브)
+
+`~/.cloudflared/cert.pem`과 `<UUID>.json`이 없으면 터널 생성 불가. **브라우저 로그인이 필요한 작업**이라 자동화 안 됨:
+
+```bash
+cloudflared login                                  # 브라우저에서 yndl.dev 도메인 관리 계정 로그인
+cloudflared tunnel create energy-trail            # UUID 출력 + credentials.json 자동 생성
+cloudflared tunnel route dns energy-trail trail.yndl.dev
+# → UUID를 config.yml의 <TUNNEL_ID>에 수동 치환 (sed -i '' "s/<TUNNEL_ID>/<UUID>/g" ~/.cloudflared/config.yml)
+
+launchctl load ~/Library/LaunchAgents/com.cloudflare.cloudflared.plist
+launchctl start com.cloudflare.cloudflared
+```
+
+#### Docker 트러블슈팅 (자주 만나는 함정)
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| ws 컨테이너 "unhealthy" | healthcheck가 `localhost` 사용 → IPv6 우선 해석, 서버는 IPv4만 바인딩 | healthcheck URL을 `127.0.0.1`로 (이미 적용됨) |
+| `ERR_MODULE_NOT_FOUND: ws` | `ws` 패키지가 devDependencies에만 있고 `--omit=dev`로 안 설치됨 | `package.json` dependencies에 `"ws": "^8.18.0"` 추가 (이미 적용됨) |
+| `/health`가 index.html 반환 | Caddyfile에서 bare `try_files` + `file_server`가 implicit catch-all handle로 평가되어 명시적 `handle`보다 먼저 매칭됨 | 모든 디렉티브를 명시적 `handle { ... }` 블록으로 감싸 순서 고정 (이미 적용됨) |
+| `/ws` 핸드셰이크 200 (HTML) | Caddy `path /ws/*`는 `/ws/foo`만 매칭, `/ws` 자체는 안 매칭 | `path /ws*`로 변경 (이미 적용됨) |
+| `docker compose down` 후 재시작 안 됨 | Docker Desktop이 죽었거나 데몬 부팅 중 | `open -a Docker` 후 30초 대기 |
+| trail.yndl.dev → 1초+ 느린 응답 | Cloudflare가 origin 못 찾고 fallback | cloudflared 프로세스 확인 + 터널 DNS 라우팅 상태 확인 |
+
 ## 절대 잊지 말 것
 
 - **모든 npm 스크립트는 `web-prototype/`에서 실행.** 루트에서 실행하면 "missing script" 에러.
