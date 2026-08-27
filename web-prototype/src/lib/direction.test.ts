@@ -8,6 +8,7 @@ import {
   cameraMoveBasis,
   applyFaceDirFromWorldDir,
   firstPersonYawInput,
+  shotAimXZ,
 } from './direction';
 
 describe('direction', () => {
@@ -159,6 +160,29 @@ describe('direction', () => {
 
     it('양쪽 동시 입력은 0', () => {
       expect(firstPersonYawInput(true, true)).toBe(0);
+    });
+  });
+
+  describe('shotAimXZ', () => {
+    it('1인칭은 camYaw가 0이어도 시선 방향으로 쏜다 (달리며 몸 돌린 뒤)', () => {
+      const dir = shotAimXZ({ firstPerson: true, lookX: 1, lookZ: 0, camYaw: 0 });
+      expect(dir.x).toBeCloseTo(1, 5);
+      expect(dir.z).toBeCloseTo(0, 5);
+    });
+
+    it('1인칭 스폰 시선(-Z)은 앞으로', () => {
+      const dir = shotAimXZ({ firstPerson: true, lookX: 0, lookZ: -1, camYaw: 0 });
+      expect(dir.x).toBeCloseTo(0, 5);
+      expect(dir.z).toBeCloseTo(-1, 5);
+    });
+
+    it('3인칭은 카메라 yaw (0 = -Z, +π/2 = -X)', () => {
+      const front = shotAimXZ({ firstPerson: false, lookX: 1, lookZ: 0, camYaw: 0 });
+      expect(front.x).toBeCloseTo(0, 5);
+      expect(front.z).toBeCloseTo(-1, 5);
+      const left = shotAimXZ({ firstPerson: false, lookX: 0, lookZ: -1, camYaw: Math.PI / 2 });
+      expect(left.x).toBeCloseTo(-1, 5);
+      expect(left.z).toBeCloseTo(0, 5);
     });
   });
 });

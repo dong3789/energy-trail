@@ -24,7 +24,11 @@ import { Joystick, LookStick, isMobileLike } from './scene/TouchController';
 import { addCharacterFeatures } from './scene/CharacterFactory';
 import { DustSystem } from './scene/DustSystem';
 import { SoundManager } from './scene/SoundManager';
-import { AbsorbSystem } from './scene/AbsorbSystem';
+import {
+  AbsorbSystem,
+  botShouldAbsorbTrails,
+  botTrailAbsorbHoldSeconds,
+} from './scene/AbsorbSystem';
 import { ItemField } from './scene/ItemField';
 import { ITEM_META, magnetTakeCount, type ItemKind } from './lib/items';
 import { escapeHtml } from './lib/html-escape';
@@ -36,6 +40,7 @@ import {
   applyFaceDirFromWorldDir,
   chaseYawFromMovement,
   shortestAngle,
+  shotAimXZ,
   wrapAngle,
 } from './lib/direction';
 import { firstPersonYawFromLookAxes, lookDeltaFromAxes } from './lib/look-stick';
@@ -1552,13 +1557,7 @@ function renderGame(): void {
     shotState.originY = selfMesh.position.y + PLAYER.height * 0.45;
     shotOriginTmp.y = shotState.originY;
     shotState.position.copy(shotOriginTmp);
-    cameraFacing.set(0, 0, -1);
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const yawQ = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      cameraFacing.applyQuaternion(yawQ);
-    }
-    cameraFacing.y = 0;
-    shotState.direction.copy(cameraFacing).normalize();
+    shotState.direction.copy(getAimDirection());
     shotState.traveled = 0;
     const mesh = createNetVisual(GAME.shotRadius, false);
     mesh.position.copy(shotState.position);
@@ -2559,14 +2558,20 @@ function renderGame(): void {
     ctx.scene.add(aimLaser);
   }
 
-  // aim 방향 계산 (cameraFacing + yaw)
+  // 그물 조준: 1인칭은 mesh 시선(달리며 돌아도 화면 앞), 3인칭은 카메라 yaw
   function getAimDirection(): THREE.Vector3 {
-    const dir = new THREE.Vector3(0, 0, -1);
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const q = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      dir.applyQuaternion(q);
+    const look = new THREE.Vector3();
+    if (SCENE.firstPerson) {
+      selfMesh.getWorldDirection(look);
+      applyFaceDirFromWorldDir(look);
     }
-    return dir.normalize();
+    const xz = shotAimXZ({
+      firstPerson: SCENE.firstPerson,
+      lookX: look.x,
+      lookZ: look.z,
+      camYaw: camState.yaw,
+    });
+    return look.set(xz.x, 0, xz.z);
   }
 
   // === PlayerController (자기) ===
@@ -4507,12 +4512,16 @@ function renderGame(): void {
       trails.update(effectiveDt, t);
       ice.update(effectiveDt);
       if (roundState === 'playing' && !game.out) {
+        const botAbsorbHold = botTrailAbsorbHoldSeconds(
+          GAME.absorbSeconds,
+          GAME.absorbCooldownSeconds,
+        );
         for (const bot of bots) {
-          if (bot.out || bot.role !== 'runner') continue;
+          if (!botShouldAbsorbTrails(bot.kind, bot.role, bot.out)) continue;
           const onTrail = trails.queryNearest(bot.mesh.position, 1.5).hit;
           if (onTrail) {
             bot.absorbHold += effectiveDt;
-            if (bot.absorbHold >= GAME.absorbSeconds) {
+            if (bot.absorbHold >= botAbsorbHold) {
               trails.consumeNearest(bot.mesh.position, 1.5);
               bot.absorbHold = 0;
               addTrailScore(1);

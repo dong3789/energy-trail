@@ -9,6 +9,21 @@
 
 import { GAME } from '../config';
 
+/**
+ * AI 봇이 자국 위에 머물러야 하는 시간.
+ * 플레이어 instant 흡수(absorbSeconds=0)를 그대로 쓰면 매 프레임 1개씩
+ * 빨아 8프레임 만에 trailGoal을 채운다.
+ */
+export function botTrailAbsorbHoldSeconds(absorbSeconds: number, cooldownSeconds: number): number {
+  if (absorbSeconds > 0) return absorbSeconds;
+  return Math.max(cooldownSeconds, 0.25);
+}
+
+/** 로컬 AI 도망자만 자국 흡수. remote는 본인 클라/서버 권위. */
+export function botShouldAbsorbTrails(kind: 'ai' | 'remote', role: string, out: boolean): boolean {
+  return kind === 'ai' && role === 'runner' && !out;
+}
+
 export type AbsorbEvent = 'idle' | 'progress' | 'complete' | 'cancel' | 'interrupted';
 
 export interface AbsorbSystemCallbacks {
