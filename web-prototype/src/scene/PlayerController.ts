@@ -300,18 +300,15 @@ export class PlayerController {
       case 'ArrowDown':
         this.input.forward = -1;
         break;
-      case 'KeyA':
-        this.input.right = -1;
-        break;
-      case 'KeyD':
-        this.input.right = 1;
-        break;
-      // 2026-08-27: 1인칭 모드에서 ←/→ 는 yaw 회전 입력
+      // 2026-08-27: 1인칭 모드에서 A/D도 yaw 회전 입력 (FPS 표준)
+      // - W 누르면서 A 누르면 좌회전하며 W 진행 (전형 FPS 좌전진)
       // - 3인칭이면 strafe로 동작 (기존 호환)
+      case 'KeyA':
       case 'ArrowLeft':
         if (this.firstPerson) this.yawLeft = true;
         else this.input.right = -1;
         break;
+      case 'KeyD':
       case 'ArrowRight':
         if (this.firstPerson) this.yawRight = true;
         else this.input.right = 1;
@@ -329,17 +326,13 @@ export class PlayerController {
       case 'ArrowDown':
         if (this.input.forward < 0) this.input.forward = 0;
         break;
+      // 2026-08-27: 1인칭 yaw 입력 해제 (A/D/←/→ 공통)
       case 'KeyA':
-        if (this.input.right < 0) this.input.right = 0;
-        break;
-      case 'KeyD':
-        if (this.input.right > 0) this.input.right = 0;
-        break;
-      // 2026-08-27: 1인칭 yaw 입력 해제
       case 'ArrowLeft':
         if (this.firstPerson) this.yawLeft = false;
         else if (this.input.right < 0) this.input.right = 0;
         break;
+      case 'KeyD':
       case 'ArrowRight':
         if (this.firstPerson) this.yawRight = false;
         else if (this.input.right > 0) this.input.right = 0;

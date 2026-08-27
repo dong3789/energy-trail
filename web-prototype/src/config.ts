@@ -227,13 +227,16 @@ export const SCENE = {
   cameraFovTagger: 68, // 술래: 좁고 정밀한 시야
   cameraFovRunner: 82, // 도망자: 넓은 시야 (술래를 먼저 보자)
 
-  // 2026-08-27: 1인칭 카메라 (상시) — ←/→ 키로 yaw 회전
-  // - 카메라 = mesh 머리 위치, yaw = mesh yaw
-  // - WASD는 그대로 카메라-상대 이동 (W = 카메라 forward)
-  // - selfMesh가 카메라 위치에 있으니 자기 mesh는 1인칭에서 보이지 않음
+  // 2026-08-27: 1인칭 카메라 (상시) — ←/→/A/D 키로 yaw 회전
+  // - 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준 패턴)
+  // - mesh의 뒷모습(등/뒷머리)이 정면 시야 하단에서 보임 → 자기 위치/방향 인지
+  // - WASD는 그대로 카메라-상대 이동 (W = 카메라 forward = mesh forward)
+  // - yaw는 mesh와 동기화 → mesh가 화면 정면에 고정 + 환경이 흐름
   firstPerson: true,
-  firstPersonHeadHeight: 1.6, // 카메라 Y 절대값 (mesh.position.y=0.85 + 머리 오프셋)
-  firstPersonYawSpeed: 3.0, // rad/s ≈ 172°/s — ←/→ 누르고 있는 동안 누적
+  // mesh 뒤로 (forward 반대 방향) 0.4m, 위로 0.1m → mesh 머리/어깨가 시야에 보임
+  firstPersonOffsetBack: 0.4,
+  firstPersonOffsetUp: 0.1,
+  firstPersonYawSpeed: 3.0, // rad/s ≈ 172°/s — ←/→/A/D 누르고 있는 동안 누적
   firstPersonShakeScale: 0.4, // 카메라 셰이크 감쇠 (1인칭은 멀미 줄이기 위해 살짝만)
 } as const;
 
