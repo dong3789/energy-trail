@@ -92,3 +92,22 @@ export function cameraMoveBasis(lookX: number, lookZ: number): XZBasis {
 export function firstPersonYawInput(left: boolean, right: boolean): number {
   return (left ? 1 : 0) - (right ? 1 : 0);
 }
+
+/**
+ * 그물 발사 XZ 방향.
+ * - 1인칭: 시선(look, local -Z) — 달리면서 쏴도 화면 앞.
+ * - 3인칭: 카메라 yaw (0 = -Z).
+ * camYaw만 쓰면 1인칭에서 몸을 돌린 뒤에도 월드 -Z로 나간다.
+ */
+export function shotAimXZ(opts: {
+  firstPerson: boolean;
+  lookX: number;
+  lookZ: number;
+  camYaw: number;
+}): { x: number; z: number } {
+  if (opts.firstPerson) {
+    const b = cameraMoveBasis(opts.lookX, opts.lookZ);
+    return { x: b.forwardX, z: b.forwardZ };
+  }
+  return { x: -Math.sin(opts.camYaw), z: -Math.cos(opts.camYaw) };
+}
