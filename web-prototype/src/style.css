@@ -2496,6 +2496,32 @@ input.invalid {
     0 4px 0 #ff85c1,
     0 6px 0 #2a1a4a;
 }
+.intro-version {
+  display: inline-block;
+  margin-left: 10px;
+  vertical-align: middle;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #5a4a7f;
+  text-shadow: none;
+  background: #fffaf0;
+  border: 3px solid #2a1a4a;
+  border-radius: 999px;
+  padding: 4px 10px;
+  box-shadow: 0 2px 0 #2a1a4a;
+}
+@media (max-width: 640px) {
+  .intro-title {
+    font-size: 56px;
+  }
+  .intro-version {
+    font-size: 12px;
+    margin-left: 6px;
+    padding: 3px 8px;
+    border-width: 2px;
+  }
+}
 .intro-tagline {
   margin: 0 0 28px;
   color: #5a4a7f;
@@ -3991,7 +4017,7 @@ input.invalid {
 }
 
 .game-canvas-wrap.touch-ui .round-score {
-  font-size: 28px;
+  font-size: 20px;
 }
 .game-canvas-wrap.touch-ui .round-timer {
   font-size: 16px;
@@ -3999,10 +4025,10 @@ input.invalid {
 }
 
 .game-canvas-wrap.touch-ui .minimap-canvas {
-  width: 72px;
-  height: 72px;
+  width: 52px;
+  height: 52px;
   top: max(8px, env(safe-area-inset-top));
-  right: max(56px, env(safe-area-inset-right));
+  right: max(48px, env(safe-area-inset-right));
 }
 
 .game-canvas-wrap.touch-ui .icon-btn.settings-btn {
@@ -4013,30 +4039,43 @@ input.invalid {
 }
 
 .game-canvas-wrap.touch-ui .item-slot {
-  left: max(12px, env(safe-area-inset-left));
-  bottom: calc(16px + env(safe-area-inset-bottom) + 132px);
-  width: 64px;
-  height: 64px;
-  min-width: 64px;
-  min-height: 64px;
-  padding: 4px;
+  left: max(8px, env(safe-area-inset-left));
+  bottom: calc(10px + env(safe-area-inset-bottom) + 84px);
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 2px;
   border-radius: 50%;
+  border-width: 2px;
+  box-shadow: 0 2px 0 #2a1a4a;
+  opacity: 0.72;
+}
+.game-canvas-wrap.touch-ui .item-slot-emoji {
+  font-size: 16px;
+}
+.game-canvas-wrap.touch-ui .item-slot-name {
+  display: none;
 }
 .game-canvas-wrap.touch-ui .item-slot-hint {
   display: none;
 }
 .game-canvas-wrap.touch-ui .joystick-base {
-  width: 120px;
-  height: 120px;
-  left: max(16px, env(safe-area-inset-left));
-  bottom: max(16px, env(safe-area-inset-bottom));
+  width: 72px;
+  height: 72px;
+  left: max(10px, env(safe-area-inset-left));
+  bottom: max(10px, env(safe-area-inset-bottom));
   pointer-events: auto;
-  opacity: 0.92;
+  opacity: 0.55;
+  border-width: 3px;
+  box-shadow: 0 3px 0 #2a1a4a;
 }
 
 .game-canvas-wrap.touch-ui .joystick-knob {
-  width: 56px;
-  height: 56px;
+  width: 32px;
+  height: 32px;
+  border-width: 2px;
+  box-shadow: 0 2px 0 #2a1a4a;
 }
 
 .look-zone {
@@ -4054,14 +4093,14 @@ input.invalid {
 
 .look-hint {
   position: absolute;
-  right: max(16px, env(safe-area-inset-right));
-  bottom: calc(16px + env(safe-area-inset-bottom) + 168px);
-  width: 108px;
-  height: 108px;
+  right: max(10px, env(safe-area-inset-right));
+  bottom: calc(10px + env(safe-area-inset-bottom) + 88px);
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  border: 3px solid rgba(42, 26, 74, 0.28);
-  background: rgba(255, 250, 240, 0.2);
-  box-shadow: 0 4px 0 rgba(42, 26, 74, 0.12);
+  border: 2px solid rgba(42, 26, 74, 0.18);
+  background: rgba(255, 250, 240, 0.12);
+  box-shadow: none;
   pointer-events: none;
   display: flex;
   align-items: center;
@@ -4071,10 +4110,10 @@ input.invalid {
 
 .look-hint::after {
   content: '시야';
-  font-size: 12px;
+  font-size: 8px;
   font-weight: 900;
-  color: rgba(42, 26, 74, 0.42);
-  letter-spacing: 0.12em;
+  color: rgba(42, 26, 74, 0.35);
+  letter-spacing: 0.06em;
 }
 
 .look-zone.is-looking .look-hint {
@@ -4083,13 +4122,13 @@ input.invalid {
 
 .look-ghost {
   position: absolute;
-  width: 128px;
-  height: 128px;
-  margin-left: -64px;
-  margin-top: -64px;
+  width: 72px;
+  height: 72px;
+  margin-left: -36px;
+  margin-top: -36px;
   border-radius: 50%;
-  border: 3px solid rgba(42, 26, 74, 0.5);
-  background: rgba(255, 250, 240, 0.32);
+  border: 2px solid rgba(42, 26, 74, 0.4);
+  background: rgba(255, 250, 240, 0.22);
   pointer-events: none;
   display: none;
 }
@@ -4102,12 +4141,12 @@ input.invalid {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 56px;
-  height: 56px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: #fff44a;
-  border: 3px solid #2a1a4a;
-  box-shadow: 0 3px 0 #2a1a4a;
+  border: 2px solid #2a1a4a;
+  box-shadow: 0 2px 0 #2a1a4a;
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
@@ -4121,15 +4160,18 @@ input.invalid {
 }
 
 .game-canvas-wrap.touch-ui .ice-btn {
-  width: 64px;
-  height: 64px;
-  min-width: 64px;
-  min-height: 64px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   border-radius: 50%;
   flex-direction: column;
   justify-content: center;
   gap: 0;
+  border-width: 2px;
+  box-shadow: 0 2px 0 #2a1a4a;
+  opacity: 0.72;
 }
 
 .game-canvas-wrap.touch-ui .ice-btn-hint,
@@ -4143,21 +4185,21 @@ input.invalid {
 
 .game-canvas-wrap.touch-ui .absorb-hud {
   left: auto;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: calc(16px + env(safe-area-inset-bottom) + 76px);
+  right: max(8px, env(safe-area-inset-right));
+  bottom: calc(10px + env(safe-area-inset-bottom) + 52px);
   transform: none;
-  width: 64px;
-  height: 64px;
-  min-width: 64px;
-  padding: 6px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 4px;
   border-radius: 50%;
   display: flex !important;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
   pointer-events: auto;
-  opacity: 1;
+  opacity: 0.7;
   z-index: 16;
 }
 
@@ -4173,12 +4215,16 @@ input.invalid {
 }
 
 .game-canvas-wrap.touch-ui .shot-fire-btn {
-  width: 72px;
-  height: 72px;
+  width: 48px;
+  height: 48px;
   top: auto;
-  bottom: max(16px, env(safe-area-inset-bottom));
-  right: max(12px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  right: max(8px, env(safe-area-inset-right));
   transform: none;
+  font-size: 16px;
+  border-width: 2px;
+  box-shadow: 0 3px 0 #2a1a4a;
+  opacity: 0.82;
 }
 
 .game-canvas-wrap.touch-ui .shot-fire-btn:active {
@@ -4205,54 +4251,54 @@ input.invalid {
     top: 6px;
   }
   .game-canvas-wrap.touch-ui .joystick-base {
-    width: 136px;
-    height: 136px;
-    bottom: max(16px, env(safe-area-inset-bottom));
-    left: max(20px, env(safe-area-inset-left));
-    opacity: 0.92;
+    width: 72px;
+    height: 72px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    left: max(12px, env(safe-area-inset-left));
+    opacity: 0.55;
     pointer-events: auto;
   }
   .game-canvas-wrap.touch-ui .joystick-base.dragging {
-    opacity: 1;
+    opacity: 0.9;
   }
   .game-canvas-wrap.touch-ui .joystick-knob {
-    width: 64px;
-    height: 64px;
+    width: 32px;
+    height: 32px;
   }
   .look-hint {
-    right: max(96px, env(safe-area-inset-right) + 80px);
-    bottom: max(16px, env(safe-area-inset-bottom));
-    width: 120px;
-    height: 120px;
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    width: 36px;
+    height: 36px;
   }
   .game-canvas-wrap.touch-ui .ice-btn,
   .game-canvas-wrap.touch-ui .absorb-hud {
-    width: 64px;
-    height: 64px;
-    min-width: 64px;
-    min-height: 64px;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
   }
   .game-canvas-wrap.touch-ui .absorb-hud {
-    bottom: calc(12px + env(safe-area-inset-bottom) + 76px);
-    right: max(16px, env(safe-area-inset-right));
+    bottom: calc(10px + env(safe-area-inset-bottom) + 52px);
+    right: max(10px, env(safe-area-inset-right));
   }
   .game-canvas-wrap.touch-ui .ice-wrap {
-    bottom: max(12px, env(safe-area-inset-bottom));
-    right: max(16px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    right: max(10px, env(safe-area-inset-right));
   }
   .game-canvas-wrap.touch-ui .shot-fire-btn {
-    width: 72px;
-    height: 72px;
-    bottom: max(12px, env(safe-area-inset-bottom));
-    right: max(16px, env(safe-area-inset-right));
+    width: 48px;
+    height: 48px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    right: max(10px, env(safe-area-inset-right));
   }
   .game-canvas-wrap.touch-ui .item-slot {
-    width: 56px;
-    height: 56px;
-    min-width: 56px;
-    min-height: 56px;
-    left: max(16px, env(safe-area-inset-left));
-    bottom: calc(16px + env(safe-area-inset-bottom) + 148px);
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    left: max(10px, env(safe-area-inset-left));
+    bottom: calc(10px + env(safe-area-inset-bottom) + 84px);
   }
 }
 

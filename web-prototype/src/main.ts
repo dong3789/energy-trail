@@ -28,6 +28,7 @@ import { AbsorbSystem } from './scene/AbsorbSystem';
 import { ItemField } from './scene/ItemField';
 import { ITEM_META, type ItemKind } from './lib/items';
 import { escapeHtml } from './lib/html-escape';
+import { appVersionLabel } from './lib/app-version';
 import { RemotePlayerSync, slerpYaw } from './lib/sync';
 import { countdownFromElapsed, firstCountdownPaint, effectiveElapsedMs } from './lib/countdown';
 import { attachWorldLabel } from './lib/follow-label';
@@ -247,6 +248,7 @@ const characters: Array<{ id: CharacterId; label: string; color: string }> = [
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('앱 컨테이너를 찾을 수 없습니다.');
 const root = app;
+const APP_VERSION = appVersionLabel(import.meta.env.VITE_APP_VERSION);
 
 let screen: Screen = 'intro';
 const profile: Profile = {
@@ -667,7 +669,7 @@ function renderIntro(): void {
   // 2026-08-15 v29: 자국 — 드라마틱 인트로
   content.innerHTML = `
     <div class="intro-eyebrow">ENERGY TRAIL</div>
-    <h1 class="intro-title">자국</h1>
+    <h1 class="intro-title">자국 <span class="intro-version">${escapeHtml(APP_VERSION)}</span></h1>
     <p class="intro-tagline">술래가 흘린 흔적을 뒤집어쓰고,<br/>어둠을 빠져나가세요.</p>
     <div class="intro-trail" aria-hidden="true">
       <span class="intro-trail-dot"></span>
@@ -765,7 +767,7 @@ function renderLobby(): void {
   content.className = 'screen screen-lobby';
   content.innerHTML = `
     <div class="lobby-eyebrow">로비 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
-    <h1 class="lobby-title">로비</h1>
+    <h1 class="lobby-title">로비 <span class="intro-version">${escapeHtml(APP_VERSION)}</span></h1>
     <p class="lobby-sub">방에 들어가면 대기실에서 술래를 정합니다.</p>
     ${
       inviteCode && !inviteConsumed
@@ -2944,6 +2946,14 @@ function renderGame(): void {
       true,
     );
   }
+  // 1인칭: 자기 눈/입/라벨이 화면을 가리지 않게 로컬 카메라에서 self mesh 제외.
+  // 다른 클라에는 네트워크 mesh가 그대로 보임.
+  if (SCENE.firstPerson) {
+    const LOCAL_BODY_LAYER = 1;
+    selfMesh.traverse((obj) => {
+      obj.layers.set(LOCAL_BODY_LAYER);
+    });
+  }
 
   const taggerBot = bots.find((b) => b.role === 'tagger');
   const taggerMeshRef = taggerBot?.mesh ?? null;
@@ -3392,8 +3402,8 @@ function renderGame(): void {
   if (mobileMode) {
     joystick = new Joystick({
       host: wrap,
-      baseRadius: 64,
-      knobRadius: 30,
+      baseRadius: 36,
+      knobRadius: 16,
       onChange: (f, r) => {
         player.setInput(f, r);
         const mag = Math.hypot(f, r);
