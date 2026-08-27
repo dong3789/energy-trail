@@ -3664,9 +3664,11 @@ function renderGame(): void {
   // 카메라가 플레이어 등 뒤에서 따라옴. 부드러운 lerp + 미세 호흡감.
   // 초기값을 플레이어 뒤로 즉시 맞춤 (튀는 것 방지)
   if (SCENE.firstPerson) {
-    // 2026-08-27: 1인칭 — 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준), yaw = mesh yaw
-    // - mesh의 뒷모습(머리/어깨)이 정면 시야에 보임 → 자기 위치/방향 인지
+    // 2026-08-27 v2: 1인칭 — 카메라 = mesh 거의 머리 위치 (살짝 뒤·살짝 위), yaw = mesh yaw
+    // - offset 0.4→0.15, 0.1→0.05로 축소 → 회전 시 카메라가 머리 주위를 크게 돌지 않음
+    // - mesh 머리/어깨가 화면 하단에 살짝 보임 → 자기 위치/방향 인지
     // - W 이동 시 mesh가 화면 정면에 고정 + 환경이 흐름 → "이동 중" 느낌
+    // - yaw 부호는 PlayerController가 mesh 회전 방향과 사용자 입력(←/→)이 직관 일치하도록 보정
     const _fpFwd = new THREE.Vector3();
     selfMesh.getWorldDirection(_fpFwd);
     ctx.camera.position.set(
@@ -3818,7 +3820,7 @@ function renderGame(): void {
       const snap = applyCountdownFromClock(now);
       if (snap.state === 'playing') {
         if (SCENE.firstPerson) {
-          // 2026-08-27: 1인칭 — 카운트다운 종료 시 카메라를 mesh 뒤쪽으로 스냅
+          // 2026-08-27 v2: 1인칭 — 카운트다운 종료 시 카메라를 mesh 머리 근처로 스냅
           const _fpFwd = new THREE.Vector3();
           selfMesh.getWorldDirection(_fpFwd);
           ctx.camera.position.set(
@@ -4750,10 +4752,10 @@ function renderGame(): void {
     camState.pitch += (camState.pitchTarget - camState.pitch) * CAM_ROT_SMOOTHING;
 
     if (SCENE.firstPerson) {
-      // 2026-08-27: 1인칭 — 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준), yaw = mesh yaw
+      // 2026-08-27 v2: 1인칭 — 카메라 = mesh 거의 머리 위치 (살짝 뒤·살짝 위), yaw = mesh yaw
+      // - offset 0.4→0.15, 0.1→0.05로 축소 → 회전 시 카메라가 머리 주위를 크게 돌지 않음
       // - PlayerController의 ←/→/A/D 키로 mesh가 회전 → 카메라가 그대로 따라감
-      // - mesh의 뒷모습(머리/어깨)이 정면 시야에 보임 → 자기 위치/방향 인지
-      // - W 이동 시 mesh가 화면 정면에 고정 + 환경이 흐름 → "이동 중" 느낌
+      //   (v2: ← = addYaw - → mesh가 왼쪽으로 회전 → 카메라가 왼쪽으로 회전)
       // - chase camState / lookAhead / 장애물 raycast 모두 우회
       const _fpFwd = new THREE.Vector3();
       selfMesh.getWorldDirection(_fpFwd);
