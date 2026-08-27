@@ -19,7 +19,8 @@
     "test:network-sim": "node scripts/network-sim.mjs"
   },
   "dependencies": {
-    "three": "^0.178.0"
+    "three": "^0.178.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
