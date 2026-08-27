@@ -3275,7 +3275,7 @@ function renderGame(): void {
     });
   }
 
-  // 얼림 버튼 (좌하단, 도망자만)
+  // 얼림 버튼 (도망자 스킬바)
   let iceBtn: HTMLButtonElement | null = null;
   let iceStatus: HTMLElement | null = null;
   if (!isTagger) {
@@ -3364,6 +3364,19 @@ function renderGame(): void {
     itemSlot.innerHTML = `<span class="item-slot-emoji">${meta.emoji}</span><span class="item-slot-name">${meta.label}</span><span class="item-slot-hint">Q</span>`;
   }
   paintItemSlot();
+  if (!isTagger) {
+    const runnerSkills = document.createElement('div');
+    runnerSkills.className = 'runner-skills';
+    const iceEl = wrap.querySelector('.ice-wrap');
+    const reviveEl = wrap.querySelector('.revive-wrap');
+    if (iceEl) runnerSkills.appendChild(iceEl);
+    if (gameMode !== 'classic') runnerSkills.appendChild(itemSlot);
+    else itemSlot.style.display = 'none';
+    if (reviveEl) runnerSkills.appendChild(reviveEl);
+    wrap.appendChild(runnerSkills);
+  } else {
+    itemSlot.style.display = 'none';
+  }
   itemSlot.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
