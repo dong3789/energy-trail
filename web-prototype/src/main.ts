@@ -2361,10 +2361,10 @@ function renderGame(): void {
     );
     selfMesh.position.set(0, PLAYER.height / 2, 0);
     selfMesh.castShadow = true;
-    // 2026-08-27: mesh forward를 -Z로 — CapsuleGeometry default(+Z forward)와
-    // 게임 진행 방향(-Z forward)을 일치시킴. 1인칭 camera.quaternion = mesh.quaternion이
-    // 올바른 forward(-Z)를 따라가도록 + velocity-기반 mesh 자동 회전(3인칭)이 정상 동작.
-    selfMesh.rotation.y = Math.PI;
+    // 2026-08-27: PR #13에서 rotation.y = PI 추가했으나 mesh forward를 +Z로 만들어서
+    // 모바일 charRight = cross(+Z, +Y) = -X → 좌/우 이동이 반대로 됨. PR #11 v1
+    // (identity)에서는 charRight = cross(-Z, +Y) = +X (정상). 표준 forward(-Z)로 복원.
+    // → PR #14 yaw swap도 함께 되돌림 (v1 표준: ← = addYaw +)
   }
   ctx.scene.add(selfMesh);
   // 2026-08-15: 머리/후드/눈 추가
