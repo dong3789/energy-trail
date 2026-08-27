@@ -35,6 +35,10 @@ export interface NetHello {
 }
 
 export function wsUrlFromLocation(loc: { protocol: string; host: string }): string {
+  // 2026-08-25: VITE_WS_URL 오버라이드 — Vercel 정적 호스팅은 /ws 경로가 없고
+  // 별도 호스트(Fly.io 등)에 WS 서버를 띄울 때 사용. 비어있거나 미정의면 현재 호스트의 /ws 사용.
+  const override = import.meta.env.VITE_WS_URL;
+  if (typeof override === 'string' && override.length > 0) return override;
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${loc.host}/ws`;
 }

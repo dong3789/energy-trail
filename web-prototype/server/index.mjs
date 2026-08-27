@@ -22,6 +22,21 @@ const REVIVE_COOLDOWN_MS = 8000; // 2026-08-25: 같은 대상 재살리기 coold
 const SHIELD_MS = 8000; // 2026-08-25: 방어막 지속시간(클라 itemShieldDuration과 일치) — 서버 권위 catch 차단용
 const SCORE_MIN_INTERVAL_MS = 250; // 2026-08-25: 점수 연타 제한 — 배치 전송 클라이언트 기준
 const SCORE_MAX_ADD = 10; // 2026-08-25: 한 메시지당 최대 가점 (배치 n 클램프)
+
+// 2026-08-25: 네트워크 시뮬레이션 (테스트/검증용) — 모바일 LTE/WiFi 전환의 가짜 재현
+// - SIM_LATENCY_MS: 평균 지연 (ms). 0이면 비활성
+// - SIM_JITTER_MS: ±분산 (ms). SIM_LATENCY_MS ±SIM_JITTER_MS 범위의 랜덤 지연
+// - SIM_DROP_RATE: 0~1 사이 확률로 peers 메시지 완전 손실
+// - peers 메시지에만 적용 — start/use/caught/score 같은 룰 메시지는 즉시 전송되어야 게임성 유지
+// - 프로덕션에서는 절대 켜지 말 것 (모든 환경변수 기본값 0)
+const SIM_LATENCY_MS = Number(process.env.SIM_LATENCY_MS || 0);
+const SIM_JITTER_MS = Number(process.env.SIM_JITTER_MS || 0);
+const SIM_DROP_RATE = Number(process.env.SIM_DROP_RATE || 0);
+if (SIM_LATENCY_MS > 0 || SIM_JITTER_MS > 0 || SIM_DROP_RATE > 0) {
+  console.log(
+    `[sim] latency=${SIM_LATENCY_MS}ms ±${SIM_JITTER_MS}ms, drop=${(SIM_DROP_RATE * 100).toFixed(1)}%`,
+  );
+}
 const MAP_WIDTH = 42; // config.ts의 MAP.width 와 일치
 const MAP_DEPTH = 42;
 const TAGGER_WIN_OUT_COUNT = 2; // 동시 다운 2명이면 술래 승 (기획안)
@@ -52,6 +67,36 @@ function broadcast(room, msg, exceptId = '') {
   for (const p of room.players.values()) {
     if (p.id === exceptId) continue;
     if (p.ws.readyState === 1) p.ws.send(raw);
+  }
+}
+
+/**
+ * 2026-08-25: peers 메시지 전용 broadcast (네트워크 시뮬레이션 적용)
+ * - SIM_DROP_RATE 확률로 완전 손실
+ * - SIM_LATENCY_MS ± SIM_JITTER_MS 만큼 setTimeout으로 지연
+ * - 룰 메시지(start/use/caught/score)는 즉시 전송 — 게임성 유지
+ * - 비활성(모든 SIM_* 0)이면 기존 broadcast와 동일
+ */
+function broadcastPeersWithSim(room, payload) {
+  if (SIM_LATENCY_MS === 0 && SIM_JITTER_MS === 0 && SIM_DROP_RATE === 0) {
+    // 2026-08-25: 비활성 — 오버헤드 없이 즉시 broadcast
+    for (const p of room.players.values()) {
+      if (p.ws.readyState === 1) p.ws.send(payload);
+    }
+    return;
+  }
+  for (const p of room.players.values()) {
+    if (p.ws.readyState !== 1) continue;
+    if (SIM_DROP_RATE > 0 && Math.random() < SIM_DROP_RATE) continue;
+    const jitter = SIM_JITTER_MS > 0 ? (Math.random() * 2 - 1) * SIM_JITTER_MS : 0;
+    const delay = Math.max(0, SIM_LATENCY_MS + jitter);
+    if (delay === 0) {
+      p.ws.send(payload);
+    } else {
+      setTimeout(() => {
+        if (p.ws.readyState === 1) p.ws.send(payload);
+      }, delay);
+    }
   }
 }
 
@@ -304,9 +349,7 @@ function tickPlaying(room) {
   });
   if (payload !== room.lastPeersRaw) {
     room.lastPeersRaw = payload;
-    for (const p of room.players.values()) {
-      if (p.ws.readyState === 1) p.ws.send(payload);
-    }
+    broadcastPeersWithSim(room, payload);
   }
 }
 

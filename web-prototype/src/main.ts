@@ -1257,7 +1257,13 @@ function renderRoom(): void {
       const client = await ensureNet();
       if (!client) {
         const status = content.querySelector('.room-code-status');
-        if (status) status.textContent = '서버 연결 실패';
+        if (status) {
+          // 2026-08-25: 에러에 원인/조치 포함 — ws 서버 미실행 or Vercel 정적 호스팅 등
+          status.textContent = '서버 연결 실패 · ws 서버를 켜세요: PORT=8791 node server/index.mjs';
+        }
+        console.error(
+          '[room] ws 연결 실패. 로컬이면 PORT=8791 node server/index.mjs 실행, 운영이면 VITE_WS_URL로 Fly.io 등 별도 호스트 지정 필요.',
+        );
         return;
       }
       netHello();
