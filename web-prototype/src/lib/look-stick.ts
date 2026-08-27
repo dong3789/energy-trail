@@ -39,3 +39,40 @@ export function lookDeltaFromAxes(
     dPitch: pitchAxis * pitchRate * t,
   };
 }
+
+/**
+ * First-person mesh yaw from look-stick axis.
+ * Stick right → negative addYaw. addYaw(+) turns camera look left (Y-axis CCW),
+ * so the sign matches lookDeltaFromAxes.dYaw (3rd-person orbit look-right).
+ */
+export function firstPersonYawFromLookAxes(
+  yawAxis: number,
+  dt: number,
+  yawRate: number = LOOK_STICK.yawRate,
+): number {
+  const t = Math.min(Math.max(dt, 0), 0.05);
+  return -yawAxis * yawRate * t;
+}
+
+/** Left-stick pointer delta → WASD-equivalent axes. Screen Y+ is down, so up = forward. */
+export function moveAxesFromPointerDelta(
+  dx: number,
+  dy: number,
+  maxDist: number,
+  deadzone = 0.08,
+): { forward: number; right: number } {
+  if (!(maxDist > 0) || !Number.isFinite(maxDist)) return { forward: 0, right: 0 };
+  const dist = Math.hypot(dx, dy);
+  let nx = dx;
+  let ny = dy;
+  if (dist > maxDist && dist > 1e-6) {
+    nx = (dx / dist) * maxDist;
+    ny = (dy / dist) * maxDist;
+  }
+  const forward = -ny / maxDist;
+  const right = nx / maxDist;
+  return {
+    forward: Math.abs(forward) < deadzone ? 0 : forward,
+    right: Math.abs(right) < deadzone ? 0 : right,
+  };
+}

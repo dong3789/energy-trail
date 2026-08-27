@@ -4,9 +4,10 @@
 /**
  * 2D 진행 방향(vx, vz)으로 캐릭터가 바라봐야 할 Y축 회전각(rad) 반환
  *
- * - 캐릭터 모델은 기본적으로 +Z 방향(전면)을 향함
- * - vx=0, vz=1 (북쪽 진행) → 회전 0
- * - vx=1, vz=0 (동쪽 진행) → 회전 -π/2 (오른쪽으로 90도)
+ * - 캐릭터 FACE와 PerspectiveCamera look는 local -Z (눈/화살표가 -Z)
+ * - Three.js getWorldDirection은 local +Z (등) — 이동 basis로 쓰면 앞뒤가 뒤집힘
+ * - vx=0, vz=-1 (얼굴 방향) → 회전 0
+ * - vx=1, vz=0 (동쪽 진행) → 회전 -π/2
  *
  * @returns 회전각 (radians), |속도|² < 1e-4 이면 0
  */
@@ -43,4 +44,51 @@ export function shortestAngle(from: number, to: number): { delta: number; abs: n
 export function chaseYawFromMovement(dx: number, dz: number, minDist = 0.05): number | null {
   if (dx * dx + dz * dz < minDist * minDist) return null;
   return rotationFromVelocity(dx, dz);
+}
+
+export interface XZBasis {
+  forwardX: number;
+  forwardZ: number;
+  rightX: number;
+  rightZ: number;
+}
+
+/**
+ * Mesh.getWorldDirection (local +Z / 등) → face + camera look (local -Z).
+ * 1인칭 이동/카메라 offset은 이 방향을 써야 PC WASD와 모바일 스틱이 같다.
+ */
+export function faceDirFromWorldDir(
+  wx: number,
+  wy: number,
+  wz: number,
+): { x: number; y: number; z: number } {
+  return { x: -wx, y: -wy, z: -wz };
+}
+
+/** Negate getWorldDirection in place so the vector is face/camera look. */
+export function applyFaceDirFromWorldDir(dir: { x: number; y: number; z: number }): void {
+  dir.x = -dir.x;
+  dir.y = -dir.y;
+  dir.z = -dir.z;
+}
+
+/**
+ * Flatten look onto XZ and build camera-relative move basis.
+ * look × worldUp → right. Looking -Z gives right = +X (D / 스틱 오른쪽).
+ */
+export function cameraMoveBasis(lookX: number, lookZ: number): XZBasis {
+  const len = Math.hypot(lookX, lookZ);
+  if (len < 1e-8) return { forwardX: 0, forwardZ: -1, rightX: 1, rightZ: 0 };
+  const fx = lookX / len;
+  const fz = lookZ / len;
+  return { forwardX: fx, forwardZ: fz, rightX: -fz, rightZ: fx };
+}
+
+/**
+ * 1인칭 ←/→ 키 → addYaw 부호.
+ * addYaw(+)는 카메라 look을 왼쪽(-X)으로 돌림 (Y축 CCW).
+ * → 키는 화면 오른쪽(+X)을 봐야 하므로 음수.
+ */
+export function firstPersonYawInput(left: boolean, right: boolean): number {
+  return (left ? 1 : 0) - (right ? 1 : 0);
 }

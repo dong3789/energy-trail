@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { GAME, SCENE, SPEED_TIERS, type SpeedTier, type ObstacleSpec } from '../config';
 import { moveCircle } from '../lib/collision';
+import { firstPersonYawInput } from '../lib/direction';
 
 export interface PlayerInputState {
   forward: number; // -1..1 (W=1, S=-1)
@@ -190,16 +191,10 @@ export class PlayerController {
     // 2026-08-15: 흡수 중이면 이동/회전 모두 스킵 (정지 상태로 흡수 게이지 유지)
     if (this.absorbing) return;
 
-    // 2026-08-27 v2: 1인칭 yaw 회전 — ←/→ 누르고 있는 동안 누적
-    // - frozen/absorbing이 아닐 때만, 그리고 1인칭일 때만
-    // - v2: ← = addYaw -, → = addYaw + (mesh 회전 방향을 사용자 입력과 직관 일치시킴)
-    // - PR #15(v1)는 mesh forward=-Z 기준 addYaw(+)가 mesh를 +X로 보내 카메라가 '오른쪽'으로
-    //   회전하는 결과를 만들어 사용자 기대(←=왼쪽회전)와 어긋남
-    // - 부호 swap만 하면 main.ts의 charRight = cameraFacing × +Y가 매 프레임 재계산되므로
-    //   모바일 조이스틱 좌/우는 자동으로 정상화됨 (이전 PR #14 cycle의 깨짐 원인인
-    //   selfMesh.rotation.y=PI는 더 이상 없음)
+    // 1인칭 yaw — 카메라 look 기준. addYaw(+) = Y축 CCW = 시선이 화면 왼쪽(-X).
+    // →/D = addYaw- 이어야 시선이 화면 오른쪽(+X). (#16은 mesh +Z/등을 추적해 부호가 반대였음)
     if (this.firstPerson) {
-      const yawDelta = (this.yawRight ? 1 : 0) - (this.yawLeft ? 1 : 0);
+      const yawDelta = firstPersonYawInput(this.yawLeft, this.yawRight);
       if (yawDelta !== 0) {
         this.addYaw(yawDelta * SCENE.firstPersonYawSpeed * dt);
       }

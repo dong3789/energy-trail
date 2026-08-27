@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { rotationFromVelocity, wrapAngle, shortestAngle, chaseYawFromMovement } from './direction';
+import {
+  rotationFromVelocity,
+  wrapAngle,
+  shortestAngle,
+  chaseYawFromMovement,
+  faceDirFromWorldDir,
+  cameraMoveBasis,
+  applyFaceDirFromWorldDir,
+  firstPersonYawInput,
+} from './direction';
 
 describe('direction', () => {
   describe('rotationFromVelocity', () => {
@@ -109,6 +118,47 @@ describe('direction', () => {
 
     it('+Z 진행은 ±π (카메라가 뒤를 봄)', () => {
       expect(Math.abs(chaseYawFromMovement(0, 1) ?? 0)).toBeCloseTo(Math.PI, 5);
+    });
+  });
+
+  describe('first-person look vs mesh world direction', () => {
+    // Three.js getWorldDirection = local +Z. Face (eyes) and PerspectiveCamera look = local -Z.
+    // Using worldDir as move basis inverts W/joystick vs the view (mobile vs PC 체감 반전).
+
+    it('spawn identity: worldDir +Z is the back; face/look is -Z', () => {
+      const look = faceDirFromWorldDir(0, 0, 1);
+      expect(look.x).toBeCloseTo(0);
+      expect(look.y).toBeCloseTo(0);
+      expect(look.z).toBeCloseTo(-1);
+    });
+
+    it('W / joystick-up along look goes -Z at spawn (into the camera view)', () => {
+      const look = faceDirFromWorldDir(0, 0, 1);
+      const b = cameraMoveBasis(look.x, look.z);
+      expect(b.forwardX).toBeCloseTo(0);
+      expect(b.forwardZ).toBeCloseTo(-1);
+      expect(b.rightX).toBeCloseTo(1);
+      expect(b.rightZ).toBeCloseTo(0);
+    });
+
+    it('in-place negate matches faceDirFromWorldDir', () => {
+      const dir = { x: 0, y: 0, z: 1 };
+      applyFaceDirFromWorldDir(dir);
+      expect(dir.z).toBeCloseTo(-1);
+    });
+  });
+
+  describe('firstPersonYawInput', () => {
+    it('→ 는 음수 (addYaw- → 카메라가 화면 오른쪽/+X 를 봄)', () => {
+      expect(firstPersonYawInput(false, true)).toBe(-1);
+    });
+
+    it('← 는 양수 (addYaw+ → 카메라가 화면 왼쪽/-X 를 봄)', () => {
+      expect(firstPersonYawInput(true, false)).toBe(1);
+    });
+
+    it('양쪽 동시 입력은 0', () => {
+      expect(firstPersonYawInput(true, true)).toBe(0);
     });
   });
 });

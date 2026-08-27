@@ -230,7 +230,7 @@ export const SCENE = {
   // 2026-08-27: 1인칭 카메라 (상시) — ←/→/A/D 키로 yaw 회전
   // - 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준 패턴)
   // - mesh의 뒷모습(등/뒷머리)이 정면 시야 하단에서 보임 → 자기 위치/방향 인지
-  // - WASD는 그대로 카메라-상대 이동 (W = 카메라 forward = mesh forward)
+  // - WASD/조이스틱 = 카메라 look (local -Z, face). getWorldDirection(+Z)을 쓰면 앞뒤가 뒤집힘
   // - yaw는 mesh와 동기화 → mesh가 화면 정면에 고정 + 환경이 흐름
   firstPerson: true,
   // 2026-08-27 v2: 카메라 offset 축소 — 회전 시 카메라 위치가 머리 주위를 크게 돌던
