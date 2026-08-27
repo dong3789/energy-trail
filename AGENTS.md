@@ -243,6 +243,24 @@ launchctl list | grep ngrok
 
 **단점**: 무료 플랜은 매 재시작마다 URL 변경. 고정 도메인은 유료.
 
+### 1.5. Cloudflare Quick Tunnel (Docker 컨테이너 방식 — 검증 완료)
+
+ngrok 대체재. **브라우저 로그인 불필요** (ephemeral `*.trycloudflare.com` 도메인 자동 생성).
+
+```bash
+# 시작 (caddy와 같은 네트워크 namespace 공유 → localhost 해석 문제 우회)
+bash scripts/cf-quick-tunnel.sh
+# → https://xxx-yyy-zzz.trycloudflare.com
+
+# 재부팅 후 자동 시작
+docker update --restart unless-stopped energy-trail-cf-quick
+```
+
+**장점**: 브라우저 로그인 불필요, 즉시 동작, HTTP/2 to Origin 헤더 drop 문제 자동 우회 (QUIC 터널이 처리).
+**단점**: 재시작마다 URL 변경, 컨테이너 의존.
+
+검증 (commit 20c0b46): HTTP /health → 200, ws 풀스택 ALL PASS (room 4421, peers 9).
+
 ### 2. Cloudflare 도메인 (HTTP/2 to Origin Off 필요)
 
 `trail.yndl.dev`를 통한 정식 도메인. 사용자 1분 대시보드 작업 필요.
