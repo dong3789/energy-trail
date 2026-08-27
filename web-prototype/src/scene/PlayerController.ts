@@ -7,7 +7,7 @@
 // 라벨은 외부에서 갱신 책임 (moveToLabel 같은 함수는 caller가 관리).
 
 import * as THREE from 'three';
-import { GAME, SPEED_TIERS, type SpeedTier, type ObstacleSpec } from '../config';
+import { GAME, SCENE, SPEED_TIERS, type SpeedTier, type ObstacleSpec } from '../config';
 import { moveCircle } from '../lib/collision';
 
 export interface PlayerInputState {
@@ -62,6 +62,12 @@ export class PlayerController {
   private speedTier: SpeedTier = 'run'; // 시작은 런 (디자인 §10: 술래 시작도 Run)
   private input: PlayerInputState = { forward: 0, right: 0 };
   private frozen = false; // 2026-08-09 v4: 얼림 — true면 입력 무시
+  // 2026-08-27: 1인칭 모드 — ←/→ 키로 yaw 회전, mesh 자동 회전 OFF
+  // - true: ArrowLeft/Right가 yaw 회전 입력으로 전환 (strafe 해제)
+  // - false: ArrowLeft/Right는 좌/우 strafe (기존)
+  private firstPerson = false;
+  private yawLeft = false;
+  private yawRight = false;
 
   // 디버그 헬퍼 — 최신 입력값 (HUD에서 읽음)
   getDebugInput(): PlayerInputState {
@@ -104,6 +110,30 @@ export class PlayerController {
       this.input.forward = 0;
       this.input.right = 0;
     }
+  }
+
+  // 2026-08-27: 1인칭 모드 토글
+  // - true: ArrowLeft/Right가 yaw 회전으로 전환, update()의 velocity-기반 mesh 자동 회전 스킵
+  // - 모드 진입 시 yaw 입력 잔여값 초기화 (입력 안 눌린 상태로 시작)
+  setFirstPersonMode(on: boolean): void {
+    this.firstPerson = on;
+    this.yawLeft = false;
+    this.yawRight = false;
+    if (on) {
+      // 1인칭 진입 시 strafe 입력 잔여값 정리 (ArrowLeft/Right가 이제 회전이므로)
+      this.input.right = 0;
+    }
+  }
+  isFirstPerson(): boolean {
+    return this.firstPerson;
+  }
+
+  // 2026-08-27: 1인칭 yaw 누적 — mesh.quaternion을 Y축으로 dr 만큼 회전
+  // - 외부 카메라가 mesh.quaternion을 그대로 따라가므로 시각적 카메라 yaw가 됨
+  addYaw(dr: number): void {
+    if (dr === 0) return;
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dr);
+    this.mesh.quaternion.premultiply(q);
   }
   isFrozen(): boolean {
     return this.frozen;
@@ -160,6 +190,16 @@ export class PlayerController {
     // 2026-08-15: 흡수 중이면 이동/회전 모두 스킵 (정지 상태로 흡수 게이지 유지)
     if (this.absorbing) return;
 
+    // 2026-08-27: 1인칭 yaw 회전 — ←/→ 누르고 있는 동안 누적
+    // - frozen/absorbing이 아닐 때만, 그리고 1인칭일 때만
+    // - ← = +yaw (좌회전), → = -yaw (우회전)
+    if (this.firstPerson) {
+      const yawDelta = (this.yawLeft ? 1 : 0) - (this.yawRight ? 1 : 0);
+      if (yawDelta !== 0) {
+        this.addYaw(yawDelta * SCENE.firstPersonYawSpeed * dt);
+      }
+    }
+
     // 2026-08-15 v3: 대시 타이머
     if (this.dashTimeLeft > 0) {
       this.dashTimeLeft = Math.max(0, this.dashTimeLeft - dt);
@@ -207,12 +247,16 @@ export class PlayerController {
     const next = this.tmpVec.copy(this.mesh.position).addScaledVector(this.velocity, dt);
 
     if (this.velocity.lengthSq() > 1e-4) {
-      const fwdComp = this.velocity.dot(this.moveForward);
-      const isStrafe = Math.abs(fwdComp) < 0.3;
-      const rotSpeed = isStrafe ? GAME.rotationSpeed * 0.35 : GAME.rotationSpeed * 0.6;
-      const angle = Math.atan2(-this.velocity.x, -this.velocity.z);
-      this.tmpQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-      this.mesh.quaternion.slerp(this.tmpQuat, Math.min(1, rotSpeed * dt));
+      // 2026-08-27: 1인칭은 카메라 yaw가 mesh yaw이므로 velocity 방향으로 mesh가 회전하면
+      // 카메라가 같이 돌아가는 부자연스러운 결과. → 1인칭에서는 mesh 자동 회전 스킵.
+      if (!this.firstPerson) {
+        const fwdComp = this.velocity.dot(this.moveForward);
+        const isStrafe = Math.abs(fwdComp) < 0.3;
+        const rotSpeed = isStrafe ? GAME.rotationSpeed * 0.35 : GAME.rotationSpeed * 0.6;
+        const angle = Math.atan2(-this.velocity.x, -this.velocity.z);
+        this.tmpQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+        this.mesh.quaternion.slerp(this.tmpQuat, Math.min(1, rotSpeed * dt));
+      }
     }
 
     const resolved = moveCircle(
@@ -257,12 +301,20 @@ export class PlayerController {
         this.input.forward = -1;
         break;
       case 'KeyA':
-      case 'ArrowLeft':
         this.input.right = -1;
         break;
       case 'KeyD':
-      case 'ArrowRight':
         this.input.right = 1;
+        break;
+      // 2026-08-27: 1인칭 모드에서 ←/→ 는 yaw 회전 입력
+      // - 3인칭이면 strafe로 동작 (기존 호환)
+      case 'ArrowLeft':
+        if (this.firstPerson) this.yawLeft = true;
+        else this.input.right = -1;
+        break;
+      case 'ArrowRight':
+        if (this.firstPerson) this.yawRight = true;
+        else this.input.right = 1;
         break;
     }
   }
@@ -278,12 +330,19 @@ export class PlayerController {
         if (this.input.forward < 0) this.input.forward = 0;
         break;
       case 'KeyA':
-      case 'ArrowLeft':
         if (this.input.right < 0) this.input.right = 0;
         break;
       case 'KeyD':
-      case 'ArrowRight':
         if (this.input.right > 0) this.input.right = 0;
+        break;
+      // 2026-08-27: 1인칭 yaw 입력 해제
+      case 'ArrowLeft':
+        if (this.firstPerson) this.yawLeft = false;
+        else if (this.input.right < 0) this.input.right = 0;
+        break;
+      case 'ArrowRight':
+        if (this.firstPerson) this.yawRight = false;
+        else if (this.input.right > 0) this.input.right = 0;
         break;
     }
   }

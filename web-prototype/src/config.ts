@@ -226,6 +226,15 @@ export const SCENE = {
   // === v33: role별 카메라 FOV — 도망자가 술래보다 넓은 시야 (회피 유리) ===
   cameraFovTagger: 68, // 술래: 좁고 정밀한 시야
   cameraFovRunner: 82, // 도망자: 넓은 시야 (술래를 먼저 보자)
+
+  // 2026-08-27: 1인칭 카메라 (상시) — ←/→ 키로 yaw 회전
+  // - 카메라 = mesh 머리 위치, yaw = mesh yaw
+  // - WASD는 그대로 카메라-상대 이동 (W = 카메라 forward)
+  // - selfMesh가 카메라 위치에 있으니 자기 mesh는 1인칭에서 보이지 않음
+  firstPerson: true,
+  firstPersonHeadHeight: 1.6, // 카메라 Y 절대값 (mesh.position.y=0.85 + 머리 오프셋)
+  firstPersonYawSpeed: 3.0, // rad/s ≈ 172°/s — ←/→ 누르고 있는 동안 누적
+  firstPersonShakeScale: 0.4, // 카메라 셰이크 감쇠 (1인칭은 멀미 줄이기 위해 살짝만)
 } as const;
 
 // ============================================================

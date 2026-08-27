@@ -2546,6 +2546,8 @@ function renderGame(): void {
     speedMultiplier: isTagger ? GAME.taggerPatrolSpeedMultiplier : 1.0, // v8: 술래 1.9배
   });
   if (!isTagger) player.setSpeedTier('sprint');
+  // 2026-08-27: 1인칭 모드 — ←/→ 키로 yaw 회전, mesh 자동 회전 OFF
+  player.setFirstPersonMode(SCENE.firstPerson);
   game.player = player;
   updateSpeedButtons('run');
 
@@ -3657,11 +3659,17 @@ function renderGame(): void {
   // === 카메라 팔로우 (2026-08-15: 오비팅 → 플레이어 뒤로) ===
   // 카메라가 플레이어 등 뒤에서 따라옴. 부드러운 lerp + 미세 호흡감.
   // 초기값을 플레이어 뒤로 즉시 맞춤 (튀는 것 방지)
-  const initialFacing = new THREE.Vector3(0, 0, -1);
-  const initialBack = initialFacing.clone().multiplyScalar(-SCENE.cameraFollowDistance);
-  ctx.camera.position.copy(selfMesh.position).add(initialBack);
-  ctx.camera.position.y = SCENE.cameraFollowHeight;
-  ctx.camera.lookAt(selfMesh.position.x, 1.5, selfMesh.position.z);
+  if (SCENE.firstPerson) {
+    // 2026-08-27: 1인칭 — 카메라 = mesh 머리, yaw = mesh yaw
+    ctx.camera.position.set(selfMesh.position.x, SCENE.firstPersonHeadHeight, selfMesh.position.z);
+    ctx.camera.quaternion.copy(selfMesh.quaternion);
+  } else {
+    const initialFacing = new THREE.Vector3(0, 0, -1);
+    const initialBack = initialFacing.clone().multiplyScalar(-SCENE.cameraFollowDistance);
+    ctx.camera.position.copy(selfMesh.position).add(initialBack);
+    ctx.camera.position.y = SCENE.cameraFollowHeight;
+    ctx.camera.lookAt(selfMesh.position.x, 1.5, selfMesh.position.z);
+  }
 
   // 카메라 lerp용 작업 벡터
   const cameraDesired = new THREE.Vector3();
@@ -3797,12 +3805,22 @@ function renderGame(): void {
     if (roundState === 'countdown') {
       const snap = applyCountdownFromClock(now);
       if (snap.state === 'playing') {
-        cameraFacing.set(0, 0, -1);
-        cameraDesired.copy(selfMesh.position);
-        cameraDesired.addScaledVector(cameraFacing, -camState.distance);
-        cameraDesired.y = Math.max(SCENE.cameraFollowHeight, 7);
-        ctx.camera.position.copy(cameraDesired);
-        ctx.camera.lookAt(selfMesh.position.x, selfMesh.position.y + 1.5, selfMesh.position.z);
+        if (SCENE.firstPerson) {
+          // 2026-08-27: 1인칭 — 카운트다운 종료 시 카메라를 mesh 머리 위로 스냅
+          ctx.camera.position.set(
+            selfMesh.position.x,
+            SCENE.firstPersonHeadHeight,
+            selfMesh.position.z,
+          );
+          ctx.camera.quaternion.copy(selfMesh.quaternion);
+        } else {
+          cameraFacing.set(0, 0, -1);
+          cameraDesired.copy(selfMesh.position);
+          cameraDesired.addScaledVector(cameraFacing, -camState.distance);
+          cameraDesired.y = Math.max(SCENE.cameraFollowHeight, 7);
+          ctx.camera.position.copy(cameraDesired);
+          ctx.camera.lookAt(selfMesh.position.x, selfMesh.position.y + 1.5, selfMesh.position.z);
+        }
         camState.yaw = 0;
         camState.yawTarget = 0;
       }
@@ -3825,17 +3843,28 @@ function renderGame(): void {
       desiredFollowPos.addScaledVector(cameraFacing, -SCENE.cameraFollowDistance);
       desiredFollowPos.y = SCENE.cameraFollowHeight;
 
-      // Easing 적용: introT=0이면 introStartPos, introT=1이면 desiredFollowPos
-      const camX = introStartPos.x + (desiredFollowPos.x - introStartPos.x) * eased;
-      const camY = introStartPos.y + (desiredFollowPos.y - introStartPos.y) * eased;
-      const camZ = introStartPos.z + (desiredFollowPos.z - introStartPos.z) * eased;
-      ctx.camera.position.set(camX, camY, camZ);
+      if (SCENE.firstPerson) {
+        // 2026-08-27: 1인칭 — 인트로 시네마틱 스윕 없이 mesh 머리에서 시작
+        ctx.camera.position.set(
+          selfMesh.position.x,
+          SCENE.firstPersonHeadHeight,
+          selfMesh.position.z,
+        );
+        ctx.camera.quaternion.copy(selfMesh.quaternion);
+      } else {
+        // Easing 적용: introT=0이면 introStartPos, introT=1이면 desiredFollowPos
+        const camX = introStartPos.x + (desiredFollowPos.x - introStartPos.x) * eased;
+        const camY = introStartPos.y + (desiredFollowPos.y - introStartPos.y) * eased;
+        const camZ = introStartPos.z + (desiredFollowPos.z - introStartPos.z) * eased;
+        ctx.camera.position.set(camX, camY, camZ);
 
-      // lookAt: 인트로 시작은 맵 중심 → 끝은 플레이어
-      const lookX = introStartLook.x + (selfMesh.position.x - introStartLook.x) * eased;
-      const lookY = introStartLook.y + (1.5 - introStartLook.y) * eased;
-      const lookZ = introStartLook.z + (selfMesh.position.z - introStartLook.z) * eased;
-      ctx.camera.lookAt(lookX, lookY, lookZ);
+        // lookAt: 인트로 시작은 맵 중심 → 끝은 플레이어
+        const lookX = introStartLook.x + (selfMesh.position.x - introStartLook.x) * eased;
+        const lookY = introStartLook.y + (1.5 - introStartLook.y) * eased;
+        const lookZ = introStartLook.z + (selfMesh.position.z - introStartLook.z) * eased;
+        ctx.camera.lookAt(lookX, lookY, lookZ);
+      }
+
       player.update(dt);
       syncNetwork();
       return;
@@ -4704,97 +4733,120 @@ function renderGame(): void {
     );
     camState.pitch += (camState.pitchTarget - camState.pitch) * CAM_ROT_SMOOTHING;
 
-    cameraFacing.set(0, 0, -1);
-
-    if (camState.mode === 'chase' && !mobileMode) {
-      const chaseYaw = chaseYawFromMovement(
-        selfMesh.position.x - prevPos.x,
-        selfMesh.position.z - prevPos.z,
-        0.12,
+    if (SCENE.firstPerson) {
+      // 2026-08-27: 1인칭 — 카메라 = mesh 머리, yaw = mesh yaw
+      // - PlayerController의 ←/→ 키로 mesh가 회전 → 카메라가 그대로 따라감
+      // - selfMesh가 카메라 위치에 있으니 자기 캐릭터는 화면에 안 보임 (가려짐)
+      // - chase camState / lookAhead / 장애물 raycast 모두 우회
+      ctx.camera.position.set(
+        selfMesh.position.x,
+        SCENE.firstPersonHeadHeight,
+        selfMesh.position.z,
       );
-      if (chaseYaw !== null) camState.yawTarget = chaseYaw;
-    }
+      ctx.camera.quaternion.copy(selfMesh.quaternion);
+      // 카메라 forward = mesh forward (1인칭에서 W = 카메라 forward = mesh forward)
+      selfMesh.getWorldDirection(cameraFacing);
+    } else {
+      cameraFacing.set(0, 0, -1);
 
-    // 1.5) yaw 회전 (사용자 우클릭 드래그) — 월드 Y축 기준
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const yawQ = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      cameraFacing.applyQuaternion(yawQ);
-    }
-
-    // 2) desired camera position: player 뒤 + 거리 + pitch
-    cameraDesired.copy(selfMesh.position);
-    cameraDesired.addScaledVector(cameraFacing, -camState.distance);
-    // 2026-08-26: 카메라 y에 selfMesh.position.y 더하기 — 게임 시작 시 카운트다운
-    // (y=7 고정) → playing 전환 시 y가 떨어지던 버그 수정. 캐릭터 머리 위
-    // 일관된 거리 유지 (기존 baseFollowY=SCENE.cameraFollowHeight만 쓰면
-    // selfMesh가 슬로프/점프할 때 카메라가 따라가지 않음).
-    const baseFollowY = selfMesh.position.y + SCENE.cameraFollowHeight;
-    const pitchOffset = Math.sin(camState.pitch) * camState.distance * 0.4;
-    cameraDesired.y = baseFollowY + pitchOffset;
-
-    // 3) 미세 호흡감
-    cameraDesired.x += Math.sin(t * 0.6) * SCENE.cameraFollowShake;
-    cameraDesired.y += Math.cos(t * 0.45) * SCENE.cameraFollowShake * 0.6;
-
-    // 4) 2026-08-15: 카메라-장애물 충돌 (벽/박스에 파묻히지 않게)
-    // - 카메라 desired 위치에서 캐릭터로 향하는 ray
-    // - 사이에 벽/박스 있으면 hit 직전까지만 카메라를 당김
-    const camRay = camRayVec.copy(cameraDesired).sub(selfMesh.position);
-    camRay.y = 0;
-    const camRayDist = camRay.length();
-    blockersScratch.length = 0;
-    for (const w of mapRefs.walls) blockersScratch.push(w);
-    for (const o of mapRefs.obstacles) blockersScratch.push(o);
-    if (camRayDist > 0.01) {
-      camRay.normalize();
-      const camRayOrigin = camRayOriginVec.copy(cameraDesired);
-      camRaycaster.set(camRayOrigin, camRay);
-      camRaycaster.near = 0;
-      camRaycaster.far = camRayDist;
-      const hits = camRaycaster.intersectObjects(blockersScratch, false);
-      if (hits.length > 0) {
-        // 2026-08-15 v2: min distance 1.0 → 0.5 — 더 강하게 캐릭터 가까이
-        const safeDist = Math.max(0.5, hits[0].distance - 0.3);
-        cameraDesired.x = selfMesh.position.x - camRay.x * safeDist;
-        cameraDesired.z = selfMesh.position.z - camRay.z * safeDist;
+      if (camState.mode === 'chase' && !mobileMode) {
+        const chaseYaw = chaseYawFromMovement(
+          selfMesh.position.x - prevPos.x,
+          selfMesh.position.z - prevPos.z,
+          0.12,
+        );
+        if (chaseYaw !== null) camState.yawTarget = chaseYaw;
       }
-    }
 
-    // 4.5) 2026-08-15 v2: lookAt raycast — 카메라가 보는 시야에 박스 있으면 보정
-    // - 카메라 위치에서 lookAt 방향으로 ray
-    // - hit 있으면 lookAt을 hit 직전(살짝 캐릭터 쪽)으로 → 캐릭터가 안 가려지도록
-    const lookRay = lookRayVec.copy(cameraLookAt).sub(ctx.camera.position);
-    const lookRayDist = lookRay.length();
-    if (lookRayDist > 0.01 && blockersScratch.length > 0) {
-      const lookDir = lookRay.normalize();
-      lookRaycaster.set(ctx.camera.position, lookDir);
-      lookRaycaster.near = 0;
-      lookRaycaster.far = lookRayDist;
-      const lookHits = lookRaycaster.intersectObjects(blockersScratch, false);
-      if (lookHits.length > 0) {
-        // lookAt을 hit의 살짝 위쪽(박스 위 +0.5m)으로 옮김 → 카메라가 박스 너머를 안 봄
-        // 가장 가까운 hit의 distance보다 살짝 짧은 곳에서 lookAt
-        // 또한 박스 위에서 캐릭터를 볼 수 있도록 y를 살짝 올림
-        const hitDist = lookHits[0].distance;
-        const safeLookDist = Math.max(0.5, hitDist - 0.5);
-        cameraLookAt.copy(ctx.camera.position).addScaledVector(lookDir, safeLookDist);
+      // 1.5) yaw 회전 (사용자 우클릭 드래그) — 월드 Y축 기준
+      if (Math.abs(camState.yaw) > 0.0001) {
+        const yawQ = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
+        cameraFacing.applyQuaternion(yawQ);
       }
+
+      // 2) desired camera position: player 뒤 + 거리 + pitch
+      cameraDesired.copy(selfMesh.position);
+      cameraDesired.addScaledVector(cameraFacing, -camState.distance);
+      // 2026-08-26: 카메라 y에 selfMesh.position.y 더하기 — 게임 시작 시 카운트다운
+      // (y=7 고정) → playing 전환 시 y가 떨어지던 버그 수정. 캐릭터 머리 위
+      // 일관된 거리 유지 (기존 baseFollowY=SCENE.cameraFollowHeight만 쓰면
+      // selfMesh가 슬로프/점프할 때 카메라가 따라가지 않음).
+      const baseFollowY = selfMesh.position.y + SCENE.cameraFollowHeight;
+      const pitchOffset = Math.sin(camState.pitch) * camState.distance * 0.4;
+      cameraDesired.y = baseFollowY + pitchOffset;
+
+      // 3) 미세 호흡감
+      cameraDesired.x += Math.sin(t * 0.6) * SCENE.cameraFollowShake;
+      cameraDesired.y += Math.cos(t * 0.45) * SCENE.cameraFollowShake * 0.6;
+
+      // 4) 2026-08-15: 카메라-장애물 충돌 (벽/박스에 파묻히지 않게)
+      // - 카메라 desired 위치에서 캐릭터로 향하는 ray
+      // - 사이에 벽/박스 있으면 hit 직전까지만 카메라를 당김
+      const camRay = camRayVec.copy(cameraDesired).sub(selfMesh.position);
+      camRay.y = 0;
+      const camRayDist = camRay.length();
+      blockersScratch.length = 0;
+      for (const w of mapRefs.walls) blockersScratch.push(w);
+      for (const o of mapRefs.obstacles) blockersScratch.push(o);
+      if (camRayDist > 0.01) {
+        camRay.normalize();
+        const camRayOrigin = camRayOriginVec.copy(cameraDesired);
+        camRaycaster.set(camRayOrigin, camRay);
+        camRaycaster.near = 0;
+        camRaycaster.far = camRayDist;
+        const hits = camRaycaster.intersectObjects(blockersScratch, false);
+        if (hits.length > 0) {
+          // 2026-08-15 v2: min distance 1.0 → 0.5 — 더 강하게 캐릭터 가까이
+          const safeDist = Math.max(0.5, hits[0].distance - 0.3);
+          cameraDesired.x = selfMesh.position.x - camRay.x * safeDist;
+          cameraDesired.z = selfMesh.position.z - camRay.z * safeDist;
+        }
+      }
+
+      // 4.5) 2026-08-15 v2: lookAt raycast — 카메라가 보는 시야에 박스 있으면 보정
+      // - 카메라 위치에서 lookAt 방향으로 ray
+      // - hit 있으면 lookAt을 hit 직전(살짝 캐릭터 쪽)으로 → 캐릭터가 안 가려지도록
+      const lookRay = lookRayVec.copy(cameraLookAt).sub(ctx.camera.position);
+      const lookRayDist = lookRay.length();
+      if (lookRayDist > 0.01 && blockersScratch.length > 0) {
+        const lookDir = lookRay.normalize();
+        lookRaycaster.set(ctx.camera.position, lookDir);
+        lookRaycaster.near = 0;
+        lookRaycaster.far = lookRayDist;
+        const lookHits = lookRaycaster.intersectObjects(blockersScratch, false);
+        if (lookHits.length > 0) {
+          // lookAt을 hit의 살짝 위쪽(박스 위 +0.5m)으로 옮김 → 카메라가 박스 너머를 안 봄
+          // 가장 가까운 hit의 distance보다 살짝 짧은 곳에서 lookAt
+          // 또한 박스 위에서 캐릭터를 볼 수 있도록 y를 살짝 올림
+          const hitDist = lookHits[0].distance;
+          const safeLookDist = Math.max(0.5, hitDist - 0.5);
+          cameraLookAt.copy(ctx.camera.position).addScaledVector(lookDir, safeLookDist);
+        }
+      }
+
+      // 5) lerp
+      ctx.camera.position.lerp(cameraDesired, SCENE.cameraFollowSmoothing);
+
+      // 5.5) 2026-08-15 v26: 카메라 y 강제 하한 20.0 → 7.0 — 적당한 높이 (박스 위는 유지)
+      // → 너무 위에서 보면 캐릭터 식별성 ↓, 게임성 ↓
+      const CAMERA_MIN_Y = 7.0;
+      if (ctx.camera.position.y < CAMERA_MIN_Y) {
+        ctx.camera.position.y = CAMERA_MIN_Y;
+      }
+
+      // 5) look at: 플레이어 위쪽 + 정면 살짝 앞
+      // 2026-08-15 v2: y += 1.5 → 2.5 — 카메라가 박스 너머를 안 보게 (lookAt 자체를 위로)
+      cameraLookAt.copy(selfMesh.position);
+      cameraLookAt.y += 2.5;
+      cameraLookAt.addScaledVector(cameraFacing, SCENE.cameraFollowLookAhead);
+      ctx.camera.lookAt(cameraLookAt);
     }
 
-    // 5) lerp
-    ctx.camera.position.lerp(cameraDesired, SCENE.cameraFollowSmoothing);
-
-    // 5.5) 2026-08-15 v26: 카메라 y 강제 하한 20.0 → 7.0 — 적당한 높이 (박스 위는 유지)
-    // → 너무 위에서 보면 캐릭터 식별성 ↓, 게임성 ↓
-    const CAMERA_MIN_Y = 7.0;
-    if (ctx.camera.position.y < CAMERA_MIN_Y) {
-      ctx.camera.position.y = CAMERA_MIN_Y;
-    }
-
-    // 4.5) 카메라 셰이크 (감쇠 + 무작위 오프셋)
+    // 4.5) 카메라 셰이크 (감쇠 + 무작위 오프셋) — 1인칭은 멀미 줄이려고 강도 ↓
     if (cameraShake > 0) {
       cameraShake = Math.max(0, cameraShake - dt * 3.0);
-      const k = cameraShake * 0.5;
+      const shakeScale = SCENE.firstPerson ? SCENE.firstPersonShakeScale : 1.0;
+      const k = cameraShake * 0.5 * shakeScale;
       ctx.camera.position.x += (Math.random() - 0.5) * k;
       ctx.camera.position.y += (Math.random() - 0.5) * k;
       ctx.camera.position.z += (Math.random() - 0.5) * k;
@@ -4812,26 +4864,13 @@ function renderGame(): void {
       ctx.camera.updateProjectionMatrix();
     }
 
-    // 5) look at: 플레이어 위쪽 + 정면 살짝 앞
-    // 2026-08-15 v2: y += 1.5 → 2.5 — 카메라가 박스 너머를 안 보게 (lookAt 자체를 위로)
-    cameraLookAt.copy(selfMesh.position);
-    cameraLookAt.y += 2.5;
-    cameraLookAt.addScaledVector(cameraFacing, SCENE.cameraFollowLookAhead);
-    ctx.camera.lookAt(cameraLookAt);
-
     // 6) 2026-08-15 v29: WASD = 카메라-상대 (이전: 캐릭터-상대 → 빙글빙글 버그)
     // - 카메라가 보는 방향이 W, 그 좌우가 A/D
     // - W = 카메라 forward, S = 카메라 backward, A/D = 좌우 (카메라 기준)
     // - W+A = 카메라 forward-left 대각선 (빙글빙글 안 함)
-    // - 카메라는 chase/orbit 모드, 사용자가 드래그하면 orbit으로 전환
-    // - 캐릭터는 이동 방향으로 회전 (PlayerController.update 안의 slerp)
-    // 카메라 forward (월드) 계산
-    cameraFacing.set(0, 0, -1);
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const q = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      cameraFacing.applyQuaternion(q);
-    }
-    charForward.copy(cameraFacing); // 카메라가 보는 방향 = W
+    // 1인칭: cameraFacing = mesh.getWorldDirection (위 if 분기에서 이미 설정됨)
+    // 3인칭: cameraFacing = (0,0,-1) + camState.yaw 회전 (위 else 분기에서 설정됨)
+    charForward.copy(cameraFacing);
     charRight.crossVectors(cameraFacing, worldUp).normalize();
     player.setMoveBasis(charForward, charRight);
 
