@@ -76,6 +76,11 @@ describe('config invariants', () => {
       expect(cycle).toBeLessThan(GAME.roundSeconds);
     });
 
+    it('자석은 승리 조건보다 적게만 당긴다', () => {
+      expect(GAME.itemMagnetMaxAbsorb).toBe(2);
+      expect(GAME.itemMagnetMaxAbsorb).toBeLessThan(GAME.trailGoal);
+    });
+
     it('얼림 사거리는 접촉 잡기보다 충분히 크다', () => {
       expect(GAME.iceRange).toBeGreaterThan(GAME.taggerContactDistance * 2);
     });

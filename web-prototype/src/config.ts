@@ -545,6 +545,7 @@ export const GAME = {
   // 2026-08-25: 신규 아이템 7종 — 자석/방어막/대시/분신/반전/로켓/투명
   itemMagnetDuration: 6,
   itemMagnetRadius: 7,
+  itemMagnetMaxAbsorb: 2, // 한 자석당 자국 2개만. 제한 없으면 한 번에 승리 조건(8)을 채움.
   itemShieldDuration: 8,
   itemDashDistance: 6,
   itemDecoyDuration: 6,
