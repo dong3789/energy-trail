@@ -220,12 +220,12 @@ export const SCENE = {
   reflectorOpacity: 0.0,
 
   // === 부스터 시 FOV 펄스 (v28: base 70 → 78) ===
-  boostFov: 78,
+  boostFov: 96,
   fovLerpSpeed: 8.0,
 
   // === v33: role별 카메라 FOV — 도망자가 술래보다 넓은 시야 (회피 유리) ===
-  cameraFovTagger: 68, // 술래: 좁고 정밀한 시야
-  cameraFovRunner: 82, // 도망자: 넓은 시야 (술래를 먼저 보자)
+  cameraFovTagger: 76, // 술래: 조금 넓혀 근접 시야 답답함 완화
+  cameraFovRunner: 90, // 도망자: 넓은 시야 (술래를 먼저 보자)
 
   // 2026-08-27: 1인칭 카메라 (상시) — ←/→/A/D 키로 yaw 회전
   // - 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준 패턴)
@@ -233,11 +233,10 @@ export const SCENE = {
   // - WASD/조이스틱 = 카메라 look (local -Z, face). getWorldDirection(+Z)을 쓰면 앞뒤가 뒤집힘
   // - yaw는 mesh와 동기화 → mesh가 화면 정면에 고정 + 환경이 흐름
   firstPerson: true,
-  // 2026-08-27 v2: 카메라 offset 축소 — 회전 시 카메라 위치가 머리 주위를 크게 돌던
-  // 문제 수정. mesh 뒤 0.15m + 위 0.05m으로 줄여 회전 시 카메라가 거의 머리 위치에
-  // 고정되어 "방향 보는대로 자연스럽게 회전"하는 FPS 느낌. 머리/어깨는 여전히 살짝 보임.
-  firstPersonOffsetBack: 0.15,
-  firstPersonOffsetUp: 0.05,
+  // 2026-08-28: 머리 안(0.15/0.05)은 눈·입이 화면을 가리고 시야가 너무 좁음.
+  // 등 뒤 2.2m + 위 1.2m — 자기 등이 작게 보이면서 주변을 더 멀리 봄.
+  firstPersonOffsetBack: 2.2,
+  firstPersonOffsetUp: 1.2,
   firstPersonYawSpeed: 3.0, // rad/s ≈ 172°/s — ←/→/A/D 누르고 있는 동안 누적
   firstPersonShakeScale: 0.4, // 카메라 셰이크 감쇠 (1인칭은 멀미 줄이기 위해 살짝만)
 } as const;

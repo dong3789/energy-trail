@@ -2948,15 +2948,6 @@ function renderGame(): void {
       true,
     );
   }
-  // 1인칭: 자기 눈/입/라벨이 화면을 가리지 않게 로컬 카메라에서 self mesh 제외.
-  // 다른 클라에는 네트워크 mesh가 그대로 보임.
-  if (SCENE.firstPerson) {
-    const LOCAL_BODY_LAYER = 1;
-    selfMesh.traverse((obj) => {
-      obj.layers.set(LOCAL_BODY_LAYER);
-    });
-  }
-
   const taggerBot = bots.find((b) => b.role === 'tagger');
   const taggerMeshRef = taggerBot?.mesh ?? null;
   const taggerMaterialRef = taggerBot?.material ?? null;
