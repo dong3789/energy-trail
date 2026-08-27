@@ -53,11 +53,41 @@ npm run test:coverage     # v8 커버리지 (lcov + html)
 ### 멀티플레이어 WS 서버 (별도 프로세스)
 
 ```bash
-PORT=8899 node server/index.mjs     # ws 서버 단독 실행 (vite dev와 별개)
-# 또는 vite dev가 server/index.mjs를 자식 프로세스로 띄움
+PORT=8791 node server/index.mjs     # ws 서버 단독 실행 — vite dev와 별개 프로세스
 ```
 
+**vite dev는 ws 서버를 자동 실행하지 않는다.** 게임 띄울 때마다 별도 터미널에서 직접 실행해야 한다. 두 프로세스 모두 살아있어야 멀티플레이어 동작. Mac mini 운영 서빙 시에는 `launchctl`/`pm2` 등으로 ws 서버를 자동 시작하도록 구성.
+
 WS 스모크 테스트 작성 시: `ws` 라이브러리로 WebSocket 클라이언트, JSON 메시지 송수신, `t: 'use' / 'catch' / 'score' / 'pos' / 'start'` 등 프로토콜 직접 호출. 서버 권위 검증(예: 점수 clamp, 방어막 차단) 반드시 서버 측에서도 어서트.
+
+### 다중 브라우저 로컬 테스트 (디바이스 1개로 멀티플레이어 검증)
+
+폰 1개뿐이어도 같은 Mac에서 두 브라우저 띄우면 별도 player로 접속한다 (각각 별도 ws 세션).
+
+```
+1. 터미널 1: PORT=8791 node server/index.mjs   # ws 서버
+2. 터미널 2: cd web-prototype && npm run dev     # vite dev
+3. Chrome 창1: http://localhost:5173 → 방 만들기 → room code 표시
+4. Safari (또는 Chrome 시크릿) 창2: 같은 URL → "코드로 참여" → 같은 room code 입력
+5. 둘 다 호스트가 "게임 시작" 누르면 같은 매치 진입
+```
+
+모두 localhost라 지연은 0이지만, 룸코드/역할 배정/peers 동기화 모두 검증된다. 실제 네트워크 지연은 `npm run test:network-sim` (서버 jitter 시뮬레이션 자동 측정) 또는 실제 디바이스(Mac + 폰 같은 WiFi)로 검증.
+
+### 네트워크 시뮬레이션 자동 검증
+
+서버 환경변수로 가짜 지연/드롭을 주입해 클라이언트 보간/외삽이 흡수하는지 자동 측정한다.
+
+```bash
+npm run test:network-sim    # 4가지 조건 자동 spawn·측정·assert
+```
+
+- `baseline`: 0ms (localhost 기준선)
+- `mobile-lte`: 100ms ±30ms (일반 모바일 LTE)
+- `unstable`: 300ms ±100ms (지하철/엘리베이터)
+- `extreme-drop`: 500ms ±100ms + 5% 드롭 (WiFi 전환 직후)
+
+서버 측 시뮬레이션은 `SIM_LATENCY_MS / SIM_JITTER_MS / SIM_DROP_RATE` 환경변수로 제어. 프로덕션에서는 절대 켜지 말 것 (모두 기본값 0).
 
 ## 절대 잊지 말 것
 
