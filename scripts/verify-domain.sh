@@ -1,36 +1,47 @@
 #!/bin/bash
 # 2026-08-25: 도메인 검증 스크립트 — 터널 + Docker ws 풀스택 검증
-# 사용법: ./scripts/verify-domain.sh [domain] (기본값: trail.yndl.dev)
-# localhost/IP를 넘기면 HTTP + ws://, 그 외는 HTTPS + wss:// 자동 선택
+# 사용법:
+#   ./scripts/verify-domain.sh [domain]              # 기본 trail.yndl.dev, HTTP+HTTPS 자동
+#   ./scripts/verify-domain.sh ws://0.tcp.ngrok.io:PORT/ws   # ws URL 직접 (ngrok 등)
+# localhost/IP를 넘기면 HTTP + ws://, 도메인이면 HTTPS + wss://, ws:// URL은 그대로 사용
 
 set -e
 
-DOMAIN="${1:-trail.yndl.dev}"
+ARG="${1:-trail.yndl.dev}"
 
-# localhost 또는 IP면 HTTP, 그 외는 HTTPS
-if [ "$DOMAIN" = "localhost" ] || [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  HTTP_SCHEME="http"
-  WS_SCHEME="ws"
+# ws:// 또는 wss:// URL 직접 입력 — 해당 URL 그대로 사용 (ngrok 등)
+if [[ "$ARG" =~ ^wss?:// ]]; then
+  WS_URL="$ARG"
+  DOMAIN="(ws URL 직접)"
+  HTTP_SCHEME="skip"
+  echo "=== WebSocket 검증: $WS_URL (HTTP 스킵) ==="
+  echo ""
 else
-  HTTP_SCHEME="https"
-  WS_SCHEME="wss"
+  DOMAIN="$ARG"
+  # localhost 또는 IP면 HTTP, 그 외는 HTTPS
+  if [ "$DOMAIN" = "localhost" ] || [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    HTTP_SCHEME="http"
+    WS_SCHEME="ws"
+  else
+    HTTP_SCHEME="https"
+    WS_SCHEME="wss"
+  fi
+  WS_URL="${WS_SCHEME}://${DOMAIN}/ws"
+
+  echo "=== 도메인 검증: $DOMAIN ($HTTP_SCHEME) ==="
+  echo ""
+
+  echo "--- 1. HTTP ---"
+  curl -sS -o /dev/null -w "  GET ${HTTP_SCHEME}://${DOMAIN}/         : HTTP %{http_code} (time=%{time_total}s)\n" --max-time 10 "${HTTP_SCHEME}://${DOMAIN}/" 2>&1
+  curl -sS -w "  GET ${HTTP_SCHEME}://${DOMAIN}/health   : HTTP %{http_code}\n" --max-time 10 "${HTTP_SCHEME}://${DOMAIN}/health" 2>&1 | tail -1
+  echo ""
+
+  echo "--- 2. 정적 자산 ---"
+  curl -sS -o /dev/null -w "  GET ${HTTP_SCHEME}://${DOMAIN}/manifest.webmanifest : HTTP %{http_code}\n" --max-time 10 "${HTTP_SCHEME}://${DOMAIN}/manifest.webmanifest" 2>&1
+  echo ""
 fi
 
-WS_URL="${WS_SCHEME}://${DOMAIN}/ws"
-
-echo "=== 도메인 검증: $DOMAIN ($HTTP_SCHEME) ==="
-echo ""
-
-echo "--- 1. HTTP ---"
-curl -sS -o /dev/null -w "  GET ${HTTP_SCHEME}://${DOMAIN}/         : HTTP %{http_code} (time=%{time_total}s)\n" --max-time 10 "${HTTP_SCHEME}://${DOMAIN}/" 2>&1
-curl -sS -w "  GET ${HTTP_SCHEME}://${DOMAIN}/health   : HTTP %{http_code}\n" --max-time 10 "${HTTP_SCHEME}://${DOMAIN}/health" 2>&1 | tail -1
-echo ""
-
-echo "--- 2. 정적 자산 ---"
-curl -sS -o /dev/null -w "  GET ${HTTP_SCHEME}://${DOMAIN}/manifest.webmanifest : HTTP %{http_code}\n" --max-time 10 "${HTTP_SCHEME}://${DOMAIN}/manifest.webmanifest" 2>&1
-echo ""
-
-echo "--- 3. WebSocket 멀티플레이어 (${WS_URL}) ---"
+echo "--- WebSocket 멀티플레이어 (${WS_URL}) ---"
 cd "$(dirname "$0")/../web-prototype"
 
 # 2026-08-25: set -e 일시 해제 — node 실패해도 자동 진단 단계 실행되도록

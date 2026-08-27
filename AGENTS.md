@@ -152,6 +152,27 @@ launchctl load ~/Library/LaunchAgents/com.cloudflare.cloudflared.plist
 launchctl start com.cloudflare.cloudflared
 ```
 
+#### ngrok TCP 터널 (Cloudflare 우회 — 검증 완료)
+
+`~/Library/Application Support/ngrok/ngrok.yml`에 authtoken이 이미 있으면 즉시 동작. **Cloudflare HTTP/2 헤더 drop 문제 우회 경로** (자체 검증 완료: room=1060, 4 peers, ts/v 동기화).
+
+```bash
+# 영구 서비스 등록 (재부팅 시 자동 시작)
+launchctl load ~/Library/LaunchAgents/com.ngrok.energy-trail.plist
+
+# 현재 터널 URL 확인
+curl -sS http://127.0.0.1:4040/api/tunnels | python3 -c "
+import json, sys
+for t in json.load(sys.stdin)['tunnels']:
+    print(t['public_url'])"
+# → tcp://0.tcp.jp.ngrok.io:28849 → localhost:8791
+
+# ws URL 형식 (반드시 /ws path 추가)
+ws://0.tcp.jp.ngrok.io:28849/ws
+```
+
+**단점**: 무료 플랜은 매 재시작마다 URL 변경 — 도메인 안정성 X. 고정 도메인은 유료 플랜. 도메인 고정 필요 시 Cloudflare tunnel 권장.
+
 #### Docker 트러블슈팅 (자주 만나는 함정)
 
 | 증상 | 원인 | 해결 |
