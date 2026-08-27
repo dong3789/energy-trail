@@ -233,9 +233,11 @@ export const SCENE = {
   // - WASD는 그대로 카메라-상대 이동 (W = 카메라 forward = mesh forward)
   // - yaw는 mesh와 동기화 → mesh가 화면 정면에 고정 + 환경이 흐름
   firstPerson: true,
-  // mesh 뒤로 (forward 반대 방향) 0.4m, 위로 0.1m → mesh 머리/어깨가 시야에 보임
-  firstPersonOffsetBack: 0.4,
-  firstPersonOffsetUp: 0.1,
+  // 2026-08-27 v2: 카메라 offset 축소 — 회전 시 카메라 위치가 머리 주위를 크게 돌던
+  // 문제 수정. mesh 뒤 0.15m + 위 0.05m으로 줄여 회전 시 카메라가 거의 머리 위치에
+  // 고정되어 "방향 보는대로 자연스럽게 회전"하는 FPS 느낌. 머리/어깨는 여전히 살짝 보임.
+  firstPersonOffsetBack: 0.15,
+  firstPersonOffsetUp: 0.05,
   firstPersonYawSpeed: 3.0, // rad/s ≈ 172°/s — ←/→/A/D 누르고 있는 동안 누적
   firstPersonShakeScale: 0.4, // 카메라 셰이크 감쇠 (1인칭은 멀미 줄이기 위해 살짝만)
 } as const;

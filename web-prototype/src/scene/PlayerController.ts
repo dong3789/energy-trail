@@ -190,13 +190,16 @@ export class PlayerController {
     // 2026-08-15: 흡수 중이면 이동/회전 모두 스킵 (정지 상태로 흡수 게이지 유지)
     if (this.absorbing) return;
 
-    // 2026-08-27: 1인칭 yaw 회전 — ←/→ 누르고 있는 동안 누적
+    // 2026-08-27 v2: 1인칭 yaw 회전 — ←/→ 누르고 있는 동안 누적
     // - frozen/absorbing이 아닐 때만, 그리고 1인칭일 때만
-    // - v1 표준: ← = addYaw +, → = addYaw - (mesh 좌/우회전)
-    // - PR #13/14 cycle: rotation.y=PI + yaw swap으로 시도했으나 모바일 charRight
-    //   부호까지 깨져서 다시 v1 표준으로 복원
+    // - v2: ← = addYaw -, → = addYaw + (mesh 회전 방향을 사용자 입력과 직관 일치시킴)
+    // - PR #15(v1)는 mesh forward=-Z 기준 addYaw(+)가 mesh를 +X로 보내 카메라가 '오른쪽'으로
+    //   회전하는 결과를 만들어 사용자 기대(←=왼쪽회전)와 어긋남
+    // - 부호 swap만 하면 main.ts의 charRight = cameraFacing × +Y가 매 프레임 재계산되므로
+    //   모바일 조이스틱 좌/우는 자동으로 정상화됨 (이전 PR #14 cycle의 깨짐 원인인
+    //   selfMesh.rotation.y=PI는 더 이상 없음)
     if (this.firstPerson) {
-      const yawDelta = (this.yawLeft ? 1 : 0) - (this.yawRight ? 1 : 0);
+      const yawDelta = (this.yawRight ? 1 : 0) - (this.yawLeft ? 1 : 0);
       if (yawDelta !== 0) {
         this.addYaw(yawDelta * SCENE.firstPersonYawSpeed * dt);
       }
