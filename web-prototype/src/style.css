@@ -326,6 +326,10 @@ input.invalid {
   background: #080b16;
   overflow: hidden;
   padding: 0;
+  /* 2026-08-28: 롱프레스 텍스트 선택/콜아웃 차단 — 게임 화면이 통째로 드래그되는 현상 방지 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 :fullscreen .game-canvas-wrap,
