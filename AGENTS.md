@@ -204,6 +204,42 @@ launchctl start com.cloudflare.cloudflared
 - **모바일 우선**: 입력/UI/세션 길이 모두 모바일 기준. PC 데스크탑 입력에 최적화하지 말 것.
 - **.gstack 디렉토리**: 사용자 환경(gstack 도구) 캐시. 수정 금지.
 
+### Cloudflare WebSocket 핸드셰이크 헤더 손실 (매우 흔한 함정)
+
+**증상**:
+- `https://trail.yndl.dev/` HTTP 200 정상 (HTML 반환)
+- `wss://trail.yndl.dev/ws` WebSocket 연결 실패 — `Invalid Sec-WebSocket-Accept header`
+- caddy 로그에는 `status: 101`, `Sec-WebSocket-Accept: S+e69Fz...` 정상 응답
+- 즉 우리 origin은 정상이지만 Cloudflare가 헤더를 drop
+
+**진단법**:
+```bash
+# 1) curl upgrade — HTTP/2 → HTML (200)
+curl -i -H "Upgrade: websocket" -H "Connection: Upgrade" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  -H "Sec-WebSocket-Version: 13" https://trail.yndl.dev/ws | head -5
+
+# 2) Node ws (HTTP/1.1) — 101 + UNDEFINED sec-accept
+node -e "const W=require('ws');new W('wss://trail.yndl.dev/ws').on('upgrade',r=>console.log(r.statusCode,r.headers['sec-websocket-accept']));"
+
+# 3) caddy 로그 — 정상 응답 확인
+docker compose logs caddy | grep -A1 "uri.*ws" | head -10
+```
+
+HTTP/2 요청만 실패하고 HTTP/1.1에서 upgrade는 성공하면 Cloudflare 헤더 drop이 원인.
+
+**해결** (Cloudflare 대시보드):
+
+1. **Network → HTTP/2 to Origin: Off** (가장 흔한 원인 — origin으로 HTTP/1.1 강제)
+2. **SSL/TLS → Full** (Strict 모드는 cert 없는 origin에서 깨짐, 우리 caddy는 HTTP만 제공)
+3. 변경 후 **30초~2분** propagation 대기
+
+설정 변경은 사용자 브라우저 인터랙티브 필요 — 자동화 불가. CLI/API 토큰으로 자동화하려면 Cloudflare API 토큰 필요 (`dash.cloudflare.com/profile/api-tokens`).
+
+**대안** (Cloudflare 완전 우회):
+- **ngrok TCP 터널**: `ngrok tcp 8791 --domain <reserved>` — 도메인 포기하고 `*.ngrok.io` 사용. auth token 1회 필요.
+- **직접 DNS**: Cloudflare DNS를 회색 구름(DNS only)으로 + A record → Mac mini 공인 IP. 라우터 포트포워딩 필요.
+
 ## 디자인 문서 참조 (필요 시)
 
 - `자국-술래잡기-DESIGN.md` — 게임 디자인 진실의 원천 (49KB, 가장 방대)
