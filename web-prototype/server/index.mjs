@@ -35,7 +35,7 @@ process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
 });
 
-/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number, shieldUntil?: number, lastScoreAt?: number }} Player */
+/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number, shieldUntil?: number, lastScoreAt?: number, prevX?: number, prevZ?: number, vx?: number, vz?: number }} Player */
 /** @typedef {{ code: string, hostId: string, map: string, mode: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number> }} Room */
 
 /** @type {Map<string, Room>} */
@@ -114,6 +114,11 @@ function placePlayers(room) {
     p.yaw = 0;
     p.invulnUntil = 0;
     p.shieldUntil = 0; // 2026-08-25: 라운드 시작 시 무적 없음
+    // 2026-08-25: 동기화용 prev/v 초기화 — 라운드 시작 시 점프 안 나게 velocity 0
+    p.prevX = p.x;
+    p.prevZ = p.z;
+    p.vx = 0;
+    p.vz = 0;
     spawns[p.id] = { x: p.x, z: p.z };
   }
   return spawns;
@@ -175,6 +180,11 @@ function resetRoomToLobby(room) {
     p.role = '';
     p.invulnUntil = 0;
     p.shieldUntil = 0; // 2026-08-25: 다음 라운드 위해 무적 초기화
+    // 2026-08-25: 동기화용 prev/v 리셋 — 다음 라운드 첫 tick에서 잘못된 Δ거리로 점프 방지
+    p.prevX = p.x;
+    p.prevZ = p.z;
+    p.vx = 0;
+    p.vz = 0;
   }
   broadcast(room, roomPayload(room));
 }
@@ -242,11 +252,41 @@ function tickPlaying(room) {
     endRoom(room, 'tagger', '도망자를 모두 잡았습니다');
     return;
   }
+  // 2026-08-25: 위치 속도 계산 — 클라 보간/외삽이 정확한 Δ거리/dt로 부드러운 동기화 가능
+  // 직전(prevX, prevZ)과 현재(x, z)의 차이를 직전 tick과의 Δt로 나누어 m/s 환산.
+  // 첫 tick(prevX === x)이면 0 유지. Δt가 0에 가까우면 안전하게 0으로 fallback.
+  // 2026-08-25: 첫 tick(lastTickAt 없음)은 velocity 계산 스킵 — now - 0 = 거대 dtSec이 되어
+  // 1m 이동도 0.001 m/s처럼 보임. prev만 동기화하고 vx/vz는 0 유지.
+  const lastTickAt = room.lastTickAt;
+  if (lastTickAt) {
+    const dtMs = Math.max(1, now - lastTickAt);
+    const dtSec = dtMs / 1000;
+    for (const p of room.players.values()) {
+      const dx = p.x - p.prevX;
+      const dz = p.z - p.prevZ;
+      p.vx = dx / dtSec;
+      p.vz = dz / dtSec;
+      p.prevX = p.x;
+      p.prevZ = p.z;
+    }
+  } else {
+    // 2026-08-25: 첫 tick — prev를 현재로 동기화, vx/vz는 0 (placePlayers에서 이미 0이지만 명시)
+    for (const p of room.players.values()) {
+      p.prevX = p.x;
+      p.prevZ = p.z;
+      p.vx = 0;
+      p.vz = 0;
+    }
+  }
+  room.lastTickAt = now;
   // 2026-08-25: 변경 감지 스킵 — 위치/점수/상태 변화가 없으면 peers 전송 생략 (대역폭·CPU 절감).
   // left는 초 단위로 올림해 1초에 한 번만 갱신 (클라이언트는 left를 사용하지 않음).
   // invulnUntil(epoch ms)을 peers에 포함해 클라이언트가 무적 상태 표시/판정에 사용.
+  // t(epoch ms) + vx/vz로 클라 보간/외삽의 기준을 제공 — "이 위치는 now 시점, 속도는 (vx,vz) m/s".
+  // 2026-08-25: row에도 ts 명시 — 클라가 row.ts를 직접 사용 가능 (상위 msg.ts fallback도 유지)
   const payload = JSON.stringify({
     t: 'peers',
+    ts: now,
     list: [...room.players.values()].map((p) => ({
       id: p.id,
       x: p.x,
@@ -255,6 +295,9 @@ function tickPlaying(room) {
       out: p.out,
       role: p.role,
       invulnUntil: p.invulnUntil || 0,
+      vx: p.vx || 0,
+      vz: p.vz || 0,
+      ts: now,
     })),
     score: room.score,
     left: Math.ceil(left),
@@ -313,6 +356,10 @@ wss.on('connection', (ws) => {
     role: '',
     out: false,
     ws,
+    prevX: 0,
+    prevZ: 0,
+    vx: 0,
+    vz: 0,
   };
   sockets.set(ws, { player, room: null });
   send(ws, { t: 'welcome', id: player.id });

@@ -20,6 +20,11 @@ export interface NetPeer {
   role: string;
   /** 2026-08-25: 부활 무적 (reviveInvulnerabilitySeconds) — 0이면 무적 아님 */
   invulnUntil?: number;
+  /** 2026-08-25: 서버 epoch ms — 클라 보간/외삽이 "이 위치가 샘플링된 시각"을 알기 위함 */
+  ts?: number;
+  /** 2026-08-25: 서버 계산 속도 (m/s) — 외삽·보간 정확도 향상 */
+  vx?: number;
+  vz?: number;
 }
 
 export interface NetHello {
@@ -244,9 +249,15 @@ export class NetClient {
       this.score = typeof msg.score === 'number' ? msg.score : this.score;
       // 2026-08-25: 서버 roundSeconds 기준 남은 시간(초, 올림) — 클라 카운트다운
       // drift를 매 peers broadcast마다 보정. roundTime - dt로 흐르는 클라 자체
-      // 시계가 RAF/탭 백그라운드로 어긋날 수 있어 서버 권위 값으로 동기화.
+      // 시계가 RAF/탭 백그라운드로 어�날 수 있어 서버 권위 값으로 동기화.
       this.lastLeftSec = typeof msg.left === 'number' ? msg.left : this.lastLeftSec;
-      for (const row of msg.list as NetPeer[]) this.peers.set(row.id, row);
+      // 2026-08-25: peers 메시지 상위 ts(epoch ms)를 각 peer에 주입 — 보간용 history에 동일 기준 시점 사용.
+      // 서버가 각 peer에 개별 ts를 안 보내므로 peers 전체의 공통 ts로 처리 (서버 tick 단위 샘플링이라 정확).
+      const peersTs = typeof msg.ts === 'number' ? msg.ts : Date.now();
+      for (const row of msg.list as NetPeer[]) {
+        // row.ts가 있으면 서버가 명시한 값, 없으면 peers 공통 ts fallback
+        this.peers.set(row.id, { ...row, ts: typeof row.ts === 'number' ? row.ts : peersTs });
+      }
     }
     if (t === 'score' && typeof msg.n === 'number') this.score = msg.n;
     if (t === 'caught' && typeof msg.id === 'string') this.onCaught?.(msg.id);

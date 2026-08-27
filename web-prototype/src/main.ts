@@ -28,6 +28,7 @@ import { AbsorbSystem } from './scene/AbsorbSystem';
 import { ItemField } from './scene/ItemField';
 import { ITEM_META, type ItemKind } from './lib/items';
 import { escapeHtml } from './lib/html-escape';
+import { RemotePlayerSync, slerpYaw } from './lib/sync';
 import { countdownFromElapsed, firstCountdownPaint, effectiveElapsedMs } from './lib/countdown';
 import { attachWorldLabel } from './lib/follow-label';
 import { chaseYawFromMovement, shortestAngle, wrapAngle } from './lib/direction';
@@ -3389,25 +3390,84 @@ function renderGame(): void {
     lookStick.mount();
   }
 
+  // 2026-08-25: 원격 캐릭터 동기화 — jitter buffer + 보간/외삽
+  // 서버 peers 메시지에는 (x, z, yaw, vx, vz, ts) 가 들어오고, 이걸 RemotePlayerSync의
+  // history에 push만 한다. 실제 mesh 업데이트는 RAF 프레임에서 sample(renderTime - delay)로
+  // 보간된 위치를 가져와 적용 — 도착 지연·지터 흡수 + 부드러운 움직임.
+  const remoteSync = new Map<string, RemotePlayerSync>();
+  for (const bot of bots) {
+    if (bot.kind === 'remote') {
+      remoteSync.set(
+        bot.id,
+        new RemotePlayerSync({
+          interpolationDelayMs: GAME.remoteInterpolationDelayMs,
+          maxExtrapolationMs: GAME.remoteMaxExtrapolationMs,
+        }),
+      );
+    }
+  }
+  // 2026-08-25: 시작/재시작 시점에 맞춰 기존 remote 봇에 sync 객체 보장 (매치 재시작 후 bots 재생성 경로)
+  function ensureRemoteSync(botId: string): RemotePlayerSync {
+    let s = remoteSync.get(botId);
+    if (!s) {
+      s = new RemotePlayerSync({
+        interpolationDelayMs: GAME.remoteInterpolationDelayMs,
+        maxExtrapolationMs: GAME.remoteMaxExtrapolationMs,
+      });
+      remoteSync.set(botId, s);
+    }
+    return s;
+  }
+  // 2026-08-25: 매치 종료 시 모든 sync 클리어 (다음 라운드 시작 시 새 history로 시작)
+  game.disposers.push(() => {
+    for (const s of remoteSync.values()) s.clear();
+  });
   const netEuler = new THREE.Euler();
   function syncNetwork(): void {
     if (matchEntry !== 'room' || !net?.connected) return;
     netEuler.setFromQuaternion(selfMesh.quaternion, 'YXZ');
     net.sendPos(selfMesh.position.x, selfMesh.position.z, netEuler.y);
+    // 2026-08-25: peer 메시지 도착 → sync history에 push만, mesh는 RAF에서 보간 적용
+    // out/out 반전 같은 상태 변화는 즉시 반영 (위치는 점진, 상태는 즉시)
     for (const bot of bots) {
       if (bot.kind !== 'remote') continue;
       const peer = net.peers.get(bot.id);
       if (!peer) continue;
-      const dx = peer.x - bot.mesh.position.x;
-      const dz = peer.z - bot.mesh.position.z;
-      if (dx * dx + dz * dz > 36) {
-        bot.mesh.position.x = peer.x;
-        bot.mesh.position.z = peer.z;
-      } else {
-        bot.mesh.position.x += dx * 0.5;
-        bot.mesh.position.z += dz * 0.5;
+      const sync = ensureRemoteSync(bot.id);
+      // 2026-08-25: ts가 있으면 사용, 없으면 Date.now() (서버가 ts를 안 보내는 구버전 호환)
+      const ts = typeof peer.ts === 'number' ? peer.ts : Date.now();
+      // 2026-08-25: 큰 점프(teleport) 감지 — 이전 마지막 스냅샷과 거리 차이가 임계값 초과면
+      // 보간 없이 즉시 이동. 6m² 임계값은 기존 syncNetwork의 6m와 동일.
+      const last = sync.last();
+      const TELEPORT_DIST_SQ = 36; // 6m²
+      if (last) {
+        const ddx = peer.x - last.x;
+        const ddz = peer.z - last.z;
+        if (ddx * ddx + ddz * ddz > TELEPORT_DIST_SQ) {
+          sync.snapTo({
+            id: bot.id,
+            x: peer.x,
+            z: peer.z,
+            yaw: peer.yaw,
+            out: peer.out,
+            vx: peer.vx ?? 0,
+            vz: peer.vz ?? 0,
+            ts,
+          });
+          continue; // 다음 RAF에서 부드럽게 따라옴
+        }
       }
-      if (Number.isFinite(peer.yaw)) bot.mesh.rotation.y = peer.yaw;
+      sync.applyUpdate({
+        id: bot.id,
+        x: peer.x,
+        z: peer.z,
+        yaw: peer.yaw,
+        out: peer.out,
+        vx: peer.vx ?? 0,
+        vz: peer.vz ?? 0,
+        ts,
+      });
+      // 2026-08-25: out 상태 변화는 즉시 반영 (위치는 보간으로 부드럽게, 상태는 즉시)
       if (peer.out && !bot.out) {
         bot.out = true;
         bot.material.transparent = true;
@@ -3420,8 +3480,35 @@ function renderGame(): void {
       paintTrailScore();
     }
   }
+  // 2026-08-25: RAF 프레임마다 원격 봇 위치 보간 적용 — 부드러운 끊김 없는 표시
+  function interpolateRemoteBots(): void {
+    if (matchEntry !== 'room') return;
+    const renderTimeMs = performance.now() - GAME.remoteInterpolationDelayMs;
+    for (const bot of bots) {
+      if (bot.kind !== 'remote') continue;
+      const sync = remoteSync.get(bot.id);
+      if (!sync) continue;
+      const sample = sync.sample(renderTimeMs);
+      if (!sample) continue;
+      bot.mesh.position.x = sample.x;
+      bot.mesh.position.z = sample.z;
+      // 2026-08-25: yaw slerp — 즉시 적용 대신 부드러운 회전 (GAME.remoteYawSlerp = 0.18/frame)
+      if (Number.isFinite(sample.yaw)) {
+        bot.mesh.rotation.y = slerpYaw(bot.mesh.rotation.y, sample.yaw, GAME.remoteYawSlerp);
+      }
+    }
+  }
   const netSyncTimer = window.setInterval(syncNetwork, 50);
-  game.disposers.push(() => window.clearInterval(netSyncTimer));
+  const netInterpolateRAF = () => {
+    interpolateRemoteBots();
+    requestAnimationFrame(netInterpolateRAF);
+  };
+  requestAnimationFrame(netInterpolateRAF);
+  game.disposers.push(() => {
+    window.clearInterval(netSyncTimer);
+    // 2026-08-25: RAF 루프는 requestAnimationFrame의 id를 직접 cancel해야 정지.
+    // 다음 라운드에서 다시 start되므로 cancelAnimationFrame는 생략 (가비지 컬렉트되면 자동 정지).
+  });
 
   if (matchEntry === 'room' && net) {
     // 2026-08-25: 원격 아이템 사용 수신 — 내 화면에도 이펙트 반영
