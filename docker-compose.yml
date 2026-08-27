@@ -52,6 +52,24 @@ services:
       ws:
         condition: service_healthy
 
+  # 2026-08-25: Cloudflare Quick Tunnel (trycloudflare.com)
+  # - profile: cf-tunnel — 사용 안 할 때 기본 compose up에서 제외
+  # - 사용법: docker compose --profile cf-tunnel up -d
+  # - caddy와 같은 네트워크 namespace 공유 → localhost 해석 우회
+  # - HTTP/2 to Origin 헤더 drop 문제 자동 우회 (QUIC 터널 처리)
+  cf-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: energy-trail-cf-quick
+    restart: unless-stopped
+    profiles: ["cf-tunnel"]
+    network_mode: "container:energy-trail-caddy"
+    command: tunnel --url http://localhost:80
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 networks:
   energy-trail-net:
     driver: bridge
