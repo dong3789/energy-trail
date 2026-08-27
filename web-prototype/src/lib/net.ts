@@ -20,6 +20,11 @@ export interface NetPeer {
   role: string;
   /** 2026-08-25: 부활 무적 (reviveInvulnerabilitySeconds) — 0이면 무적 아님 */
   invulnUntil?: number;
+  /** 2026-08-25: 서버 epoch ms — 클라 보간/외삽이 "이 위치가 샘플링된 시각"을 알기 위함 */
+  ts?: number;
+  /** 2026-08-25: 서버 계산 속도 (m/s) — 외삽·보간 정확도 향상 */
+  vx?: number;
+  vz?: number;
 }
 
 export interface NetHello {
@@ -30,6 +35,10 @@ export interface NetHello {
 }
 
 export function wsUrlFromLocation(loc: { protocol: string; host: string }): string {
+  // 2026-08-25: VITE_WS_URL 오버라이드 — Vercel 정적 호스팅은 /ws 경로가 없고
+  // 별도 호스트(Fly.io 등)에 WS 서버를 띄울 때 사용. 비어있거나 미정의면 현재 호스트의 /ws 사용.
+  const override = import.meta.env.VITE_WS_URL;
+  if (typeof override === 'string' && override.length > 0) return override;
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${loc.host}/ws`;
 }
@@ -58,6 +67,7 @@ export class NetClient {
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
   onUse: ((id: string, kind: string) => void) | null = null;
+  onShieldBlock: ((id: string) => void) | null = null;
   /** 2026-08-25: 부활됨 (id, x, z, invulnUntil) — 메인 루프에서 위치 텔레포트 + 무적 적용 */
   onRevived: ((p: { id: string; x: number; z: number; invulnUntil: number }) => void) | null = null;
   /** 2026-08-25: 살리기 실패 (사유) — UI 피드백 */
@@ -149,9 +159,9 @@ export class NetClient {
     this.send({ t: 'pos', x, z, yaw });
   }
 
-  sendScore(): void {
-    // 2026-08-25: 서버가 n(유한한 숫자)을 필수 검증 — NaN 주입 차단. 미전송 시 점수가 무시된다.
-    this.send({ t: 'score', n: 1 });
+  sendScore(n = 1): void {
+    // 2026-08-25: 서버가 n(유한한 숫자, 1~10 클램프)을 필수 검증 — 배치 점수는 n에 누적치를 담아 전송
+    this.send({ t: 'score', n });
   }
 
   sendCatch(id: string): void {
@@ -243,13 +253,20 @@ export class NetClient {
       this.score = typeof msg.score === 'number' ? msg.score : this.score;
       // 2026-08-25: 서버 roundSeconds 기준 남은 시간(초, 올림) — 클라 카운트다운
       // drift를 매 peers broadcast마다 보정. roundTime - dt로 흐르는 클라 자체
-      // 시계가 RAF/탭 백그라운드로 어긋날 수 있어 서버 권위 값으로 동기화.
+      // 시계가 RAF/탭 백그라운드로 어�날 수 있어 서버 권위 값으로 동기화.
       this.lastLeftSec = typeof msg.left === 'number' ? msg.left : this.lastLeftSec;
-      for (const row of msg.list as NetPeer[]) this.peers.set(row.id, row);
+      // 2026-08-25: peers 메시지 상위 ts(epoch ms)를 각 peer에 주입 — 보간용 history에 동일 기준 시점 사용.
+      // 서버가 각 peer에 개별 ts를 안 보내므로 peers 전체의 공통 ts로 처리 (서버 tick 단위 샘플링이라 정확).
+      const peersTs = typeof msg.ts === 'number' ? msg.ts : Date.now();
+      for (const row of msg.list as NetPeer[]) {
+        // row.ts가 있으면 서버가 명시한 값, 없으면 peers 공통 ts fallback
+        this.peers.set(row.id, { ...row, ts: typeof row.ts === 'number' ? row.ts : peersTs });
+      }
     }
     if (t === 'score' && typeof msg.n === 'number') this.score = msg.n;
     if (t === 'caught' && typeof msg.id === 'string') this.onCaught?.(msg.id);
     if (t === 'use' && typeof msg.id === 'string') this.onUse?.(msg.id, String(msg.kind || ''));
+    if (t === 'shieldblock' && typeof msg.id === 'string') this.onShieldBlock?.(msg.id);
     // 2026-08-25: 부활됨 — 위치 텔레포트 + 무적 적용
     if (t === 'revived' && typeof msg.id === 'string') {
       const inv = typeof msg.invulnUntil === 'number' ? msg.invulnUntil : 0;

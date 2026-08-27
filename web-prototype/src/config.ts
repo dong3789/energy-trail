@@ -539,6 +539,17 @@ export const GAME = {
   itemRocketDuration: 3,
   itemRocketSpeedMul: 2.0,
   itemInvisDuration: 5,
+  itemSmokeFogRange: 12, // 2026-08-25: 이 거리 이내에서 쓴 상대 연막만 화면 안개로 (원거리는 이펙트만)
+
+  // 2026-08-25: 멀티플레이어 원격 캐릭터 보간/외삽
+  // - interpolationDelayMs: 클라가 실제 시간보다 이만큼 뒤에서 그릴지. 100~150ms 권장 (네트워크 jitter 흡수)
+  // - maxExtrapolationMs: 이 시간 지나면 마지막 위치 고정 (오래된 외삽은 부정확)
+  // - sendPosHz: 자기 위치 송신 빈도. 20Hz(50ms) — 보간과 잘 어울리는 표준
+  // - peerSlerp: yaw 즉시 적용 대신 slerp factor (per RAF frame)
+  remoteInterpolationDelayMs: 100,
+  remoteMaxExtrapolationMs: 250,
+  remoteSendPosHz: 20,
+  remoteYawSlerp: 0.18,
   itemStickyDuration: 5.0,
   itemStickyRadius: 2.4,
   itemStickySlowMul: 0.45,

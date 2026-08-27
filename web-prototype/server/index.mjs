@@ -19,6 +19,24 @@ const REVIVE_RANGE = 3.5; // 살리는 쪽 → 시체까지 최대 거리
 const REVIVE_INVULNERABLE_SECONDS = 1.0; // 부활 후 무적
 const REVIVE_EDGE_MARGIN = 3.0; // 가장자리 스폰 마진
 const REVIVE_COOLDOWN_MS = 8000; // 2026-08-25: 같은 대상 재살리기 cooldown — 자국 3개 가치(≈8초)에 맞춰 서버 권위 가드
+const SHIELD_MS = 8000; // 2026-08-25: 방어막 지속시간(클라 itemShieldDuration과 일치) — 서버 권위 catch 차단용
+const SCORE_MIN_INTERVAL_MS = 250; // 2026-08-25: 점수 연타 제한 — 배치 전송 클라이언트 기준
+const SCORE_MAX_ADD = 10; // 2026-08-25: 한 메시지당 최대 가점 (배치 n 클램프)
+
+// 2026-08-25: 네트워크 시뮬레이션 (테스트/검증용) — 모바일 LTE/WiFi 전환의 가짜 재현
+// - SIM_LATENCY_MS: 평균 지연 (ms). 0이면 비활성
+// - SIM_JITTER_MS: ±분산 (ms). SIM_LATENCY_MS ±SIM_JITTER_MS 범위의 랜덤 지연
+// - SIM_DROP_RATE: 0~1 사이 확률로 peers 메시지 완전 손실
+// - peers 메시지에만 적용 — start/use/caught/score 같은 룰 메시지는 즉시 전송되어야 게임성 유지
+// - 프로덕션에서는 절대 켜지 말 것 (모든 환경변수 기본값 0)
+const SIM_LATENCY_MS = Number(process.env.SIM_LATENCY_MS || 0);
+const SIM_JITTER_MS = Number(process.env.SIM_JITTER_MS || 0);
+const SIM_DROP_RATE = Number(process.env.SIM_DROP_RATE || 0);
+if (SIM_LATENCY_MS > 0 || SIM_JITTER_MS > 0 || SIM_DROP_RATE > 0) {
+  console.log(
+    `[sim] latency=${SIM_LATENCY_MS}ms ±${SIM_JITTER_MS}ms, drop=${(SIM_DROP_RATE * 100).toFixed(1)}%`,
+  );
+}
 const MAP_WIDTH = 42; // config.ts의 MAP.width 와 일치
 const MAP_DEPTH = 42;
 const TAGGER_WIN_OUT_COUNT = 2; // 동시 다운 2명이면 술래 승 (기획안)
@@ -32,7 +50,7 @@ process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
 });
 
-/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number }} Player */
+/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number, shieldUntil?: number, lastScoreAt?: number, prevX?: number, prevZ?: number, vx?: number, vz?: number }} Player */
 /** @typedef {{ code: string, hostId: string, map: string, mode: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number> }} Room */
 
 /** @type {Map<string, Room>} */
@@ -49,6 +67,36 @@ function broadcast(room, msg, exceptId = '') {
   for (const p of room.players.values()) {
     if (p.id === exceptId) continue;
     if (p.ws.readyState === 1) p.ws.send(raw);
+  }
+}
+
+/**
+ * 2026-08-25: peers 메시지 전용 broadcast (네트워크 시뮬레이션 적용)
+ * - SIM_DROP_RATE 확률로 완전 손실
+ * - SIM_LATENCY_MS ± SIM_JITTER_MS 만큼 setTimeout으로 지연
+ * - 룰 메시지(start/use/caught/score)는 즉시 전송 — 게임성 유지
+ * - 비활성(모든 SIM_* 0)이면 기존 broadcast와 동일
+ */
+function broadcastPeersWithSim(room, payload) {
+  if (SIM_LATENCY_MS === 0 && SIM_JITTER_MS === 0 && SIM_DROP_RATE === 0) {
+    // 2026-08-25: 비활성 — 오버헤드 없이 즉시 broadcast
+    for (const p of room.players.values()) {
+      if (p.ws.readyState === 1) p.ws.send(payload);
+    }
+    return;
+  }
+  for (const p of room.players.values()) {
+    if (p.ws.readyState !== 1) continue;
+    if (SIM_DROP_RATE > 0 && Math.random() < SIM_DROP_RATE) continue;
+    const jitter = SIM_JITTER_MS > 0 ? (Math.random() * 2 - 1) * SIM_JITTER_MS : 0;
+    const delay = Math.max(0, SIM_LATENCY_MS + jitter);
+    if (delay === 0) {
+      p.ws.send(payload);
+    } else {
+      setTimeout(() => {
+        if (p.ws.readyState === 1) p.ws.send(payload);
+      }, delay);
+    }
   }
 }
 
@@ -109,7 +157,13 @@ function placePlayers(room) {
     p.x = pos.x;
     p.z = pos.z;
     p.yaw = 0;
-    p.invulnUntil = 0; // 2026-08-25: 라운드 시작 시 무적 없음
+    p.invulnUntil = 0;
+    p.shieldUntil = 0; // 2026-08-25: 라운드 시작 시 무적 없음
+    // 2026-08-25: 동기화용 prev/v 초기화 — 라운드 시작 시 점프 안 나게 velocity 0
+    p.prevX = p.x;
+    p.prevZ = p.z;
+    p.vx = 0;
+    p.vz = 0;
     spawns[p.id] = { x: p.x, z: p.z };
   }
   return spawns;
@@ -169,7 +223,13 @@ function resetRoomToLobby(room) {
   for (const p of room.players.values()) {
     p.out = false;
     p.role = '';
-    p.invulnUntil = 0; // 2026-08-25: 다음 라운드 위해 무적 초기화
+    p.invulnUntil = 0;
+    p.shieldUntil = 0; // 2026-08-25: 다음 라운드 위해 무적 초기화
+    // 2026-08-25: 동기화용 prev/v 리셋 — 다음 라운드 첫 tick에서 잘못된 Δ거리로 점프 방지
+    p.prevX = p.x;
+    p.prevZ = p.z;
+    p.vx = 0;
+    p.vz = 0;
   }
   broadcast(room, roomPayload(room));
 }
@@ -221,6 +281,11 @@ function tickPlaying(room) {
     for (const run of aliveRunners) {
       // 2026-08-25: 부활 무적 (reviveInvulnerabilitySeconds) 적용
       if (run.invulnUntil > now) continue;
+      // 2026-08-25: 방어막 서버 권위 — 잡힘 1회 무효 + 소모, 클라에 차단 브로드캐스트
+      if (run.shieldUntil && run.shieldUntil > now) {
+        broadcast(room, { t: 'shieldblock', id: run.id });
+        continue;
+      }
       if (dist(tag, run) <= CATCH_DIST) {
         run.out = true;
         broadcast(room, { t: 'caught', id: run.id });
@@ -232,11 +297,41 @@ function tickPlaying(room) {
     endRoom(room, 'tagger', '도망자를 모두 잡았습니다');
     return;
   }
+  // 2026-08-25: 위치 속도 계산 — 클라 보간/외삽이 정확한 Δ거리/dt로 부드러운 동기화 가능
+  // 직전(prevX, prevZ)과 현재(x, z)의 차이를 직전 tick과의 Δt로 나누어 m/s 환산.
+  // 첫 tick(prevX === x)이면 0 유지. Δt가 0에 가까우면 안전하게 0으로 fallback.
+  // 2026-08-25: 첫 tick(lastTickAt 없음)은 velocity 계산 스킵 — now - 0 = 거대 dtSec이 되어
+  // 1m 이동도 0.001 m/s처럼 보임. prev만 동기화하고 vx/vz는 0 유지.
+  const lastTickAt = room.lastTickAt;
+  if (lastTickAt) {
+    const dtMs = Math.max(1, now - lastTickAt);
+    const dtSec = dtMs / 1000;
+    for (const p of room.players.values()) {
+      const dx = p.x - p.prevX;
+      const dz = p.z - p.prevZ;
+      p.vx = dx / dtSec;
+      p.vz = dz / dtSec;
+      p.prevX = p.x;
+      p.prevZ = p.z;
+    }
+  } else {
+    // 2026-08-25: 첫 tick — prev를 현재로 동기화, vx/vz는 0 (placePlayers에서 이미 0이지만 명시)
+    for (const p of room.players.values()) {
+      p.prevX = p.x;
+      p.prevZ = p.z;
+      p.vx = 0;
+      p.vz = 0;
+    }
+  }
+  room.lastTickAt = now;
   // 2026-08-25: 변경 감지 스킵 — 위치/점수/상태 변화가 없으면 peers 전송 생략 (대역폭·CPU 절감).
   // left는 초 단위로 올림해 1초에 한 번만 갱신 (클라이언트는 left를 사용하지 않음).
   // invulnUntil(epoch ms)을 peers에 포함해 클라이언트가 무적 상태 표시/판정에 사용.
+  // t(epoch ms) + vx/vz로 클라 보간/외삽의 기준을 제공 — "이 위치는 now 시점, 속도는 (vx,vz) m/s".
+  // 2026-08-25: row에도 ts 명시 — 클라가 row.ts를 직접 사용 가능 (상위 msg.ts fallback도 유지)
   const payload = JSON.stringify({
     t: 'peers',
+    ts: now,
     list: [...room.players.values()].map((p) => ({
       id: p.id,
       x: p.x,
@@ -245,15 +340,16 @@ function tickPlaying(room) {
       out: p.out,
       role: p.role,
       invulnUntil: p.invulnUntil || 0,
+      vx: p.vx || 0,
+      vz: p.vz || 0,
+      ts: now,
     })),
     score: room.score,
     left: Math.ceil(left),
   });
   if (payload !== room.lastPeersRaw) {
     room.lastPeersRaw = payload;
-    for (const p of room.players.values()) {
-      if (p.ws.readyState === 1) p.ws.send(payload);
-    }
+    broadcastPeersWithSim(room, payload);
   }
 }
 
@@ -303,6 +399,10 @@ wss.on('connection', (ws) => {
     role: '',
     out: false,
     ws,
+    prevX: 0,
+    prevZ: 0,
+    vx: 0,
+    vz: 0,
   };
   sockets.set(ws, { player, room: null });
   send(ws, { t: 'welcome', id: player.id });
@@ -418,6 +518,7 @@ wss.on('connection', (ws) => {
         p.role = room.roles[p.id];
         p.out = false;
         p.invulnUntil = 0;
+    p.shieldUntil = 0;
       }
       room.phase = 'playing';
       room.startedAt = Date.now();
@@ -453,7 +554,12 @@ wss.on('connection', (ws) => {
       typeof msg.n === 'number' &&
       Number.isFinite(msg.n)
     ) {
-      room.score += 1;
+      // 2026-08-25: 레이트 리밋 + 클램프 — 연타 점수 폭주 차단 (자석 배치 전송은 250ms 간격으로 통과)
+      const nowScore = Date.now();
+      if (nowScore - (player.lastScoreAt || 0) < SCORE_MIN_INTERVAL_MS) return;
+      player.lastScoreAt = nowScore;
+      const add = Math.max(1, Math.min(SCORE_MAX_ADD, Math.floor(msg.n)));
+      room.score += add;
       broadcast(room, { t: 'score', n: room.score });
       if (room.score >= TRAIL_GOAL) endRoom(room, 'runner', `자국 ${TRAIL_GOAL}개 수집`);
       return;
@@ -483,7 +589,12 @@ wss.on('connection', (ws) => {
       const nowUse = Date.now();
       if (nowUse - (player.lastUseAt || 0) < 400) return;
       player.lastUseAt = nowUse;
-      broadcast(room, { t: 'use', id: player.id, kind }, player.id);
+      // 2026-08-25: 방어막 — 서버 권위 추적 (catch 판정에서 차단에 사용)
+      const kindUse = String(msg.kind || '').slice(0, 12);
+      if (kindUse === 'shield' && player.role === 'runner') {
+        player.shieldUntil = nowUse + SHIELD_MS;
+      }
+      broadcast(room, { t: 'use', id: player.id, kind: kindUse }, player.id);
       return;
     }
     if (t === 'catch' && room.phase === 'playing' && player.role === 'tagger') {
@@ -494,6 +605,11 @@ wss.on('connection', (ws) => {
         !target.out &&
         dist(player, target) <= CATCH_DIST + 2
       ) {
+        // 2026-08-25: 방어막 서버 권위 — 메시지 캐치도 차단 + 소모
+if (target.shieldUntil && target.shieldUntil > Date.now()) {
+      broadcast(room, { t: 'shieldblock', id: target.id });
+      return;
+    }
         target.out = true;
         broadcast(room, { t: 'caught', id: target.id });
       }
