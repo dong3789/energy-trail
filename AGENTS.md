@@ -225,6 +225,30 @@ ws://0.tcp.jp.ngrok.io:28849/ws
 - **모바일 우선**: 입력/UI/세션 길이 모두 모바일 기준. PC 데스크탑 입력에 최적화하지 말 것.
 - **.gstack 디렉토리**: 사용자 환경(gstack 도구) 캐시. 수정 금지.
 
+## 도메인 노출 경로 (권장 순서)
+
+### 1. ngrok TCP 터널 (현재 권장 — 검증 완료, 즉시 동작)
+
+Cloudflare 헤더 drop 문제 우회. launchd 영구 서비스로 동작.
+
+```bash
+# 상태 확인
+bash scripts/ngrok-status.sh
+# → tcp://0.tcp.jp.ngrok.io:28849
+# → ws://0.tcp.jp.ngrok.io:28849/ws
+
+# 재부팅 후 자동 시작 (이미 등록됨)
+launchctl list | grep ngrok
+```
+
+**단점**: 무료 플랜은 매 재시작마다 URL 변경. 고정 도메인은 유료.
+
+### 2. Cloudflare 도메인 (HTTP/2 to Origin Off 필요)
+
+`trail.yndl.dev`를 통한 정식 도메인. 사용자 1분 대시보드 작업 필요.
+
+**현재 상태**: Cloudflare Network → HTTP/2 to Origin: **On** (이게 원인). 변경 후 도메인 ws 동작.
+
 ### Cloudflare WebSocket 핸드셰이크 헤더 손실 (매우 흔한 함정)
 
 **증상**:
