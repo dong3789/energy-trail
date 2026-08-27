@@ -279,10 +279,22 @@ HTTP/2 요청만 실패하고 HTTP/1.1에서 upgrade는 성공하면 Cloudflare 
 2. **SSL/TLS → Full** (Strict 모드는 cert 없는 origin에서 깨짐, 우리 caddy는 HTTP만 제공)
 3. 변경 후 **30초~2분** propagation 대기
 
-설정 변경은 사용자 브라우저 인터랙티브 필요 — 자동화 불가. CLI/API 토큰으로 자동화하려면 Cloudflare API 토큰 필요 (`dash.cloudflare.com/profile/api-tokens`).
+**자동화** (API 토큰 기반 — 사용자 1회 토큰 제공):
+
+```bash
+# 1. https://dash.cloudflare.com/profile/api-tokens 에서 토큰 생성
+#    권한: Zone → Zone Settings: Edit
+
+# 2. 환경변수 + 스크립트 실행 (30초 안에 HTTP/2 Off + 도메인 검증)
+export CF_API_TOKEN="<your-token>"
+bash scripts/setup-domain.sh yndl.dev
+# → Zone ID 조회 → HTTP/2 Off → SSL 모드 확인 → verify-domain.sh 자동 실행
+```
+
+토큰은 환경변수에만 (저장 안 함). 세션 종료 시 `unset CF_API_TOKEN`.
 
 **대안** (Cloudflare 완전 우회):
-- **ngrok TCP 터널**: `ngrok tcp 8791 --domain <reserved>` — 도메인 포기하고 `*.ngrok.io` 사용. auth token 1회 필요.
+- **ngrok TCP 터널**: `bash scripts/start-all.sh` — 이미 자동 등록됨. `*.ngrok.io` 도메인 사용. 무료 플랜은 재시작마다 URL 변경.
 - **직접 DNS**: Cloudflare DNS를 회색 구름(DNS only)으로 + A record → Mac mini 공인 IP. 라우터 포트포워딩 필요.
 
 ## 디자인 문서 참조 (필요 시)
