@@ -63,6 +63,7 @@ import { MAX_RECONNECT_ATTEMPTS, decideReconnect, waitBeforeNextAttempt } from '
 import { reconnectFlow, type AttemptResult } from './lib/reconnect-flow';
 import { serverEpochToClientPerf } from './lib/time-sync';
 import { judgeTrailRound } from './lib/round-rules';
+import { applyVisualViewportVars, requestGameFullscreen } from './lib/fullscreen';
 import {
   assignRoles,
   buildSoloSeats,
@@ -249,6 +250,7 @@ const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('앱 컨테이너를 찾을 수 없습니다.');
 const root = app;
 const APP_VERSION = appVersionLabel(import.meta.env.VITE_APP_VERSION);
+applyVisualViewportVars();
 
 let screen: Screen = 'intro';
 const profile: Profile = {
@@ -591,6 +593,7 @@ function trackTimeout(callback: () => void, ms: number): number {
 }
 
 function setScreen(next: Screen): void {
+  if (next === 'game') void requestGameFullscreen(document.documentElement);
   if (shouldTeardownGame(screen, next)) {
     try {
       teardownGame();
@@ -686,7 +689,10 @@ function renderIntro(): void {
     <button type="button" class="button primary intro-cta">시작하기</button>
   `;
   const cta = content.querySelector<HTMLButtonElement>('.intro-cta');
-  cta?.addEventListener('click', () => setScreen('login'));
+  cta?.addEventListener('click', () => {
+    void requestGameFullscreen(document.documentElement);
+    setScreen('login');
+  });
   root.append(content);
 }
 
@@ -1928,6 +1934,17 @@ function renderGame(): void {
   settingsBtn.innerHTML = '⚙';
   settingsBtn.addEventListener('click', () => showPauseMenu());
   wrap.appendChild(settingsBtn);
+  const fsBtn = document.createElement('button');
+  fsBtn.type = 'button';
+  fsBtn.className = 'icon-btn fs-btn';
+  fsBtn.setAttribute('aria-label', '전체화면');
+  fsBtn.textContent = '⛶';
+  fsBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void requestGameFullscreen(document.documentElement);
+  });
+  wrap.appendChild(fsBtn);
 
   // 뒤로가기 버튼 (우상단) — 숨김 (일시정지 메뉴가 생겼으므로)
   const back = button('← 로비', () => leaveToLobby(), 'ghost game-back');
@@ -2307,6 +2324,7 @@ function renderGame(): void {
     }
     game.out = true;
     resultOverlay.classList.add('show');
+    wrap.querySelector('.spectate-chip')?.classList.remove('show');
   }
   const mapHalfD = MAP.depth / 2 - MAP.wallThickness;
   game.out = false;
@@ -3309,7 +3327,7 @@ function renderGame(): void {
     reviveBarFill = reviveBtn.querySelector<HTMLElement>('.revive-bar-fill');
     // 모바일/마우스: pointerdown/up으로 키와 동일 효과
     const startHold = (): void => {
-      if (game.out || !GAME.reviveEnabled) return;
+      if (roundState !== 'playing' || !GAME.reviveEnabled) return;
       if (reviveHoldActive) return;
       const target = pickReviveTarget();
       if (!target) return;
@@ -3615,7 +3633,7 @@ function renderGame(): void {
     };
     net.onCaught = (id) => {
       if (id === net?.id) {
-        showResult('tagger', '술래에게 잡혔습니다');
+        eliminateSelf('술래에게 잡혔습니다');
         return;
       }
       const bot = bots.find((b) => b.id === id);
@@ -3700,14 +3718,15 @@ function renderGame(): void {
   // 이동·카메라 offset 모두 look(-Z)을 써야 W/조이스틱 위 = 화면 속 방향.
   const _fpLook = new THREE.Vector3();
   const snapFirstPersonCamera = (look: THREE.Vector3): void => {
-    selfMesh.getWorldDirection(look);
+    const follow = spectateFollow();
+    follow.getWorldDirection(look);
     applyFaceDirFromWorldDir(look);
     ctx.camera.position.set(
-      selfMesh.position.x - look.x * SCENE.firstPersonOffsetBack,
-      selfMesh.position.y + SCENE.firstPersonOffsetUp,
-      selfMesh.position.z - look.z * SCENE.firstPersonOffsetBack,
+      follow.position.x - look.x * SCENE.firstPersonOffsetBack,
+      follow.position.y + SCENE.firstPersonOffsetUp,
+      follow.position.z - look.z * SCENE.firstPersonOffsetBack,
     );
-    ctx.camera.quaternion.copy(selfMesh.quaternion);
+    ctx.camera.quaternion.copy(follow.quaternion);
     ctx.camera.updateMatrixWorld(true);
     ctx.camera.getWorldDirection(look);
     look.y = 0;
@@ -3775,6 +3794,10 @@ function renderGame(): void {
   `;
   wrap.appendChild(outOverlay);
   game.outOverlay = outOverlay;
+  const spectateChip = document.createElement('div');
+  spectateChip.className = 'spectate-chip';
+  spectateChip.textContent = '관전 중';
+  wrap.appendChild(spectateChip);
 
   // v34: WIN 컨페티 (DOM particle) — resultOverlay에 append해서 위에 표시
   function spawnConfetti(): void {
@@ -3799,31 +3822,58 @@ function renderGame(): void {
   const outRetryBtn = outOverlay.querySelector<HTMLButtonElement>('#out-retry');
   const outLobbyBtn = outOverlay.querySelector<HTMLButtonElement>('#out-lobby');
 
+  function runnersStillAlive(): boolean {
+    return bots.some((b) => b.role === 'runner' && !b.out);
+  }
+
+  function spectateFollow(): THREE.Object3D {
+    if (!game.out || isTagger || roundState !== 'playing') return selfMesh;
+    const alive = bots.filter((b) => b.role === 'runner' && !b.out);
+    if (alive[0]) return alive[0].mesh;
+    return taggerMesh;
+  }
+
   function showOut(reason: string): void {
     if (game.out) return;
     game.out = true;
     game.outReason = reason;
-    // 2026-08-15 v29: OUT 타이틀 버그 수정
-    // - 술래(유저): "도망자를 잡았습니다!" (자랑)
-    // - 도망자(유저): "잡혔습니다" (패배)
     if (outTitleEl) outTitleEl.textContent = isTagger ? '도망자를 잡았습니다!' : '잡혔습니다';
     if (outSubEl) outSubEl.textContent = reason;
-    // 술래는 OUT 오버레이 스킵 (결과 화면에서 승리 표시)
     if (!isTagger) {
       outOverlay.classList.add('show');
     }
-    // 2026-08-15: OUT 빨간 비네트 플래시
     if (game.outFlash) {
       game.outFlash.classList.add('active');
       trackTimeout(() => game.outFlash?.classList.remove('active'), 800);
     }
-    // 2026-08-15: 흡수 정리
     if (absorb) absorb.reset();
     if (player.isAbsorbing()) player.setAbsorbing(false);
   }
 
+  function eliminateSelf(reason: string): void {
+    if (roundState === 'ended') return;
+    if (!game.out) showOut(reason);
+    player.setFrozen(true);
+    if (!runnersStillAlive()) {
+      showResult('tagger', reason);
+      return;
+    }
+    if (outSubEl) outSubEl.textContent = '동료가 아직 뛰고 있어요 · 관전합니다';
+    if (outRetryBtn) outRetryBtn.textContent = '👁 계속 보기';
+    spectateChip.classList.add('show');
+    trackTimeout(() => {
+      if (roundState === 'playing') outOverlay.classList.remove('show');
+    }, 2000);
+  }
+
   if (outRetryBtn) {
-    outRetryBtn.addEventListener('click', () => restartMatch());
+    outRetryBtn.addEventListener('click', () => {
+      if (roundState === 'playing' && runnersStillAlive()) {
+        outOverlay.classList.remove('show');
+        return;
+      }
+      restartMatch();
+    });
   }
   if (outLobbyBtn) {
     outLobbyBtn.addEventListener('click', () => leaveToLobby());
@@ -4047,7 +4097,7 @@ function renderGame(): void {
       // 둘 다 필터하므로 aliveRunner + 거리 < reviveRange 동시 만족 = 가능.
       // 자국 부족/마지막 10초는 click 시 explainReviveDenyIfApplicable가 거절하므로
       // 여기서는 "타겟이 있냐"만 보고 버튼 enable.
-      if (reviveBtn && !game.out && !reviveHoldActive && roundState === 'playing') {
+      if (reviveBtn && !reviveHoldActive && roundState === 'playing') {
         const canRevive = pickReviveTarget() !== null;
         if (canRevive && reviveBtn.disabled) reviveBtn.disabled = false;
         else if (!canRevive && !reviveBtn.disabled) reviveBtn.disabled = true;
@@ -4411,7 +4461,7 @@ function renderGame(): void {
           } else if (!liveHumans) {
             sound.playOut();
             roundStats.outCount += 1;
-            showResult('tagger', '술래에게 잡혔습니다');
+            eliminateSelf('술래에게 잡혔습니다');
           }
         } else if (taggerStunLeft <= 0 && !liveHumans) {
           let tagged = false;
