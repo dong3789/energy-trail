@@ -21,9 +21,8 @@ describe('judgeTrailRound', () => {
     expect(r?.winner).toBe('runner');
   });
 
-  it('목표 미달 상태에서 잡히면 술래 승', () => {
-    const r = judgeTrailRound({ ...base, trailScore: 5, playerCaught: true });
-    expect(r?.winner).toBe('tagger');
+  it('한 명만 잡혀도 동료가 남으면 라운드는 계속 (관전)', () => {
+    expect(judgeTrailRound({ ...base, trailScore: 5, playerCaught: true })).toBeNull();
   });
 
   it('목표 달성과 모두 잡힘이 동시면 목표 달성 우선', () => {
@@ -31,10 +30,10 @@ describe('judgeTrailRound', () => {
     expect(r?.winner).toBe('runner');
   });
 
-  it('잡힘과 모두 잡힘이 동시면 잡힘 사유 우선', () => {
+  it('도망자가 모두 잡히면 술래 승', () => {
     const r = judgeTrailRound({ ...base, playerCaught: true, allRunnersOut: true });
     expect(r?.winner).toBe('tagger');
-    expect(r?.reason).toBe('술래에게 잡혔습니다');
+    expect(r?.reason).toBe('도망자를 모두 잡았습니다');
   });
 
   it('시간 안에 목표를 못 채우면 술래 승', () => {

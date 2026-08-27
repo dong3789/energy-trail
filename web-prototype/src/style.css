@@ -322,11 +322,17 @@ input.invalid {
   position: fixed;
   inset: 0;
   width: 100%;
-  height: 100dvh;
-  height: 100svh;
+  height: 100%;
   background: #080b16;
   overflow: hidden;
   padding: 0;
+}
+
+:fullscreen .game-canvas-wrap,
+:-webkit-full-screen .game-canvas-wrap {
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .game-canvas-host {
@@ -973,6 +979,27 @@ input.invalid {
 .out-overlay.show {
   opacity: 1;
   pointer-events: auto;
+}
+
+.spectate-chip {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 18;
+  display: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 3px solid #2a1a4a;
+  background: #fffaf0;
+  color: #2a1a4a;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow: 0 3px 0 #2a1a4a;
+  pointer-events: none;
+}
+.spectate-chip.show {
+  display: block;
 }
 
 .out-card {
@@ -4106,6 +4133,16 @@ input.invalid {
   width: 40px;
   height: 40px;
 }
+.fs-btn {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(52px, env(safe-area-inset-right) + 44px);
+  z-index: 16;
+}
+:fullscreen .fs-btn,
+:-webkit-full-screen .fs-btn {
+  display: none;
+}
 
 .game-canvas-wrap.touch-ui .runner-skills {
   right: max(10px, env(safe-area-inset-right));
@@ -4297,7 +4334,7 @@ input.invalid {
 
 @media (orientation: landscape) {
   .game-canvas-wrap.touch-ui .status-hud {
-    top: 6px;
+    top: max(28px, env(safe-area-inset-top));
     padding: 2px 10px;
   }
   .game-canvas-wrap.touch-ui .round-timer {
@@ -4309,7 +4346,12 @@ input.invalid {
   .game-canvas-wrap.touch-ui .minimap-canvas {
     width: 56px;
     height: 56px;
-    top: 6px;
+    top: max(28px, env(safe-area-inset-top));
+  }
+  .game-canvas-wrap.touch-ui .icon-btn.settings-btn,
+  .game-canvas-wrap.touch-ui .fs-btn,
+  .game-canvas-wrap.touch-ui .spectate-chip {
+    top: max(28px, env(safe-area-inset-top));
   }
   .game-canvas-wrap.touch-ui .joystick-base {
     width: 72px;
