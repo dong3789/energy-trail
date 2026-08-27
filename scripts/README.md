@@ -23,7 +23,7 @@ bash scripts/verify-domain.sh trail.yndl.dev
 |---|---|---|
 | `start-all.sh` | Docker Desktop 확인 + compose up + ngrok 영구 서비스 시작 + URL 출력 | **자동** |
 | `ngrok-status.sh` | 현재 ngrok TCP 터널 URL + ws URL + 검증 명령 출력 | **자동** |
-| `verify-domain.sh [domain\|ws://URL]` | HTTP + 정적 + WebSocket 풀스택 smoke + 자동 진단 | **자동** |
+| `cf-quick-tunnel.sh` | Cloudflare Quick Tunnel (Docker 컨테이너, 브라우저 로그인 불필요) | **자동** || `verify-domain.sh [domain\|ws://URL]` | HTTP + 정적 + WebSocket 풀스택 smoke + 자동 진단 | **자동** |
 | `setup-tunnel.sh` | Cloudflare 터널 1회 셋업 (cert.pem → tunnel create → DNS route → config 패치) | **수동 1회** |
 | `setup-domain.sh [zone]` | Cloudflare API로 HTTP/2 to Origin Off + 도메인 검증 | **수동 1회** (토큰 필요) |
 
