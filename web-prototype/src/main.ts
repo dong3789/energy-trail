@@ -40,7 +40,6 @@ import {
   applyFaceDirFromWorldDir,
   chaseYawFromMovement,
   shortestAngle,
-  shotAimXZ,
   wrapAngle,
 } from './lib/direction';
 import { firstPersonYawFromLookAxes, lookDeltaFromAxes } from './lib/look-stick';
@@ -2603,18 +2602,16 @@ function renderGame(): void {
     ctx.scene.add(aimLaser);
   }
 
-  // 그물 조준: 항상 캐릭터 정면 (1인칭/3인칭 공통 — mesh local -Z)
+  // 그물 조준: 카메라 실제 look 방향 (mesh.getWorldDirection은 캐릭터 정면만 반영하여
+  // mouse-drag 직후 fireShot 시점에 mesh/camera가 한 프레임 어긋날 수 있음 — 카메라를
+  // 직접 쓰면 aimLaser(시각)와 shot(물리) 일치 보장. 1인칭/3인칭 chase 모두 카메라가
+  // 캐릭터를 따라가므로 결과는 face 방향과 동일).
   function getAimDirection(): THREE.Vector3 {
     const look = new THREE.Vector3();
-    selfMesh.getWorldDirection(look);
-    applyFaceDirFromWorldDir(look);
-    const xz = shotAimXZ({
-      firstPerson: SCENE.firstPerson,
-      lookX: look.x,
-      lookZ: look.z,
-      camYaw: camState.yaw,
-    });
-    return look.set(xz.x, 0, xz.z);
+    ctx.camera.getWorldDirection(look);
+    look.y = 0;
+    if (look.lengthSq() > 1e-8) look.normalize();
+    return look;
   }
 
   // === PlayerController (자기) ===
