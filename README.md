@@ -43,20 +43,23 @@
 - **번들러**: Vite 7
 - **테스트**: Vitest 2 (44 단위 테스트)
 - **린트**: ESLint 9 + Prettier 3
-- **CI/CD**: GitHub Actions + Vercel
+- **CI/CD**: GitHub Actions
 
 ### 인프라
 - **소스 호스팅**: GitHub (private repo)
-- **배포**: Vercel (정적 호스팅, 글로벌 CDN, 자동 HTTPS)
+- **배포**: Mac mini + Docker/Caddy (정적 호스팅, /ws 프록시)
+- **도메인**: trail.yndl.dev (Cloudflare Tunnel)
 - **CI**: GitHub Actions (lint → typecheck → test → build, PR마다)
 
 ## 폴더 구조
 
 ```
 EnergyTrail/
-├── .github/workflows/      # GitHub Actions CI/CD
-│   ├── ci.yml              # PR/main 마다 lint + type + test + build
-│   └── deploy.yml          # Vercel 수동 배포 (备用)
+├── .github/workflows/      # GitHub Actions CI
+│   └── ci.yml              # PR/main 마다 lint + type + test + build
+├── Caddyfile               # reverse proxy + 정적 호스팅 + /ws 프록시
+├── docker-compose.yml      # caddy + ws 컨테이너 정의
+├── deploy.sh               # Mac mini 배포 스크립트
 ├── web-prototype/          # Three.js 프로토타입
 │   ├── src/
 │   │   ├── lib/            # 순수 모듈 (테스트 가능)
@@ -78,8 +81,8 @@ EnergyTrail/
 │   │   └── style.css
 │   ├── eslint.config.js
 │   ├── vitest.config.ts
-│   ├── vercel.json
 │   ├── tsconfig.json
+│   ├── Dockerfile          # 정적 호스팅용
 │   └── package.json
 ├── 자국-술래잡기-DESIGN.md
 ├── 자국-프로젝트-분석.md
@@ -133,7 +136,7 @@ main (보호됨, 직접 push 금지)
 2. 커밋 (lint + typecheck + test 통과)
 3. `main`에 PR 생성 → CI 자동 실행
 4. PR 리뷰 (셀프) → squash merge
-5. main에 머지되면 Vercel 자동 프로덕션 배포
+5. main에 머지되면 릴리스 태그 발행 (`gh release create`) → Mac mini에서 `deploy.sh <tag>` 수동 배포
 
 **브랜치 보호 규칙** (GitHub Settings → Branches):
 - ✅ Require pull request reviews before merging
@@ -155,29 +158,19 @@ PR / main push마다 자동 실행:
 5. **Build** — `vite build` (실제로 번들 생성되는지)
 6. **Artifacts** — `dist/` 7일 보관
 
-### Vercel 자동 배포
+### 배포 (Mac mini + Docker/Caddy)
 
-`main` 머지 시:
-- 자동 production 배포 → `https://energy-trail.vercel.app` (예시)
-- 이전 배포는 보존 (rollback 가능)
-- 모든 PR은 preview URL 자동 생성 → `https://energy-trail-git-feat-xxx.vercel.app`
+`main` 푸시는 CI만 트리거. 실제 배포는:
 
-### 첫 Vercel 설정 방법
-
-1. https://vercel.com/signup → GitHub 계정으로 가입
-2. **Add New Project** → GitHub repo `dong3789/energy-trail` 선택
-3. **Framework Preset**: Vite (자동 감지)
-4. **Root Directory**: `web-prototype`
-5. **Build Command**: `npm run build` (기본값 OK)
-6. **Output Directory**: `dist` (기본값 OK)
-7. **Environment Variables**: 없음
-8. **Deploy** 클릭 → 1~2분 후 라이브 URL 발급
-9. 이후 GitHub push 시 자동 배포 (main = production, 그 외 = preview)
+1. **릴리스 태그 발행**: `gh release create --target main` → `v2026.05.30.1` 형식
+2. **Mac mini 배포**: `~/Desktop/ftp/energy-trail` 워크트리에서 `./deploy.sh v2026.05.30.1`
+3. 스크립트가 태그 checkout → `npm ci` → `npm run build` → docker 재기동
+4. **Caddy 라우팅**: `trail.yndl.dev` → `energy-trail:80` (Cloudflare Tunnel)
 
 ## 배포 환경
 
-- **Production**: https://energy-trail.vercel.app (예시, Vercel이 자동 발급)
-- **Preview**: PR마다 자동 생성
+- **Production**: https://trail.yndl.dev (Mac mini + Cloudflare Tunnel + Caddy)
+- **WS 서버**: 같은 호스트, `PORT=8791`, Caddy가 `/ws*` 프록시
 - **모바일 PWA**: 향후 manifest.json + service worker 추가 가능
 
 ## 출시 로드맵 (참고, 사이드 프로젝트)
@@ -188,14 +181,14 @@ PR / main push마다 자동 실행:
 | 2차 프로토타입 | 모바일 입력/UI, 함정/도구 ✅ |
 | 알파 | AI 봇, 3개 맵, 폴리시 ✅ |
 | 폴리시 | 비주얼 Vibe E, 사운드, 결과 화면 ✅ |
-| **인프라** | **CI/CD + Vercel 배포** ← 현재 |
+| **인프라** | **CI/CD + Mac mini 운영** ← 현재 |
 | 베타 | 멀티플레이어, 로컬라이제이션, iOS TestFlight |
 | 정식 출시 | iOS + Google Play 동시 |
 
 ## 다음 액션
 
-1. ✅ Vercel 연결 (위 가이드)
-2. 도메인 연결 (선택): `trail.yoon-dev.com` 같은 custom domain
+1. ✅ Mac mini 운영 (Docker/Caddy)
+2. ✅ 도메인: `trail.yndl.dev` (Cloudflare Tunnel)
 3. PWA manifest + service worker (모바일 홈화면 추가)
 4. 디자인 폴리시 (선택)
 5. 베타 — 멀티플레이어 (NGO/Photon)

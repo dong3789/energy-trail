@@ -1,6 +1,6 @@
 # AGENTS.md — Energy Trail (자국)
 
-3D 술래잡기 게임 프로토타입. 술래가 자국을 흘리고, 도망자가 그 자국을 흡수해 가속한다. Three.js + TypeScript + Vite 기반 모바일 우선 단일 페이지 프로토타입. Vercel 자동 배포. 디자인 상세는 `자국-술래잡기-DESIGN.md` 참조.
+3D 술래잡기 게임 프로토타입. 술래가 자국을 흘리고, 도망자가 그 자국을 흡수해 가속한다. Three.js + TypeScript + Vite 기반 모바일 우선 단일 페이지 프로토타입. Mac mini + Docker/Caddy로 직접 서빙. 디자인 상세는 `자국-술래잡기-DESIGN.md` 참조.
 
 ## 프로젝트 구조
 
@@ -8,7 +8,10 @@
 
 ```
 energy-trail/
-├── .github/workflows/      # ci.yml (PR/main 푸시마다), deploy.yml (Vercel)
+├── .github/workflows/      # ci.yml (PR/main 푸시마다)
+├── Caddyfile               # reverse proxy + 정적 호스팅 + /ws 프록시
+├── docker-compose.yml      # caddy + ws 컨테이너 정의
+├── deploy.sh               # Mac mini 배포 스크립트 (태그 checkout → build → docker 재시작)
 ├── web-prototype/          # 실제 코드 — 여기로 들어가서 작업
 │   ├── server/             # 멀티플레이어 WS 서버 (Node.js, ws 라이브러리)
 │   ├── src/
@@ -220,8 +223,7 @@ ws://0.tcp.jp.ngrok.io:28849/ws
 ## 일반 함정
 
 - **zsh scm_breeze 래퍼**: 환경에서 `git`이 `_safe_eval` 미정의 오류로 실패한다. 실제 바이너리 `/opt/homebrew/bin/git` 사용. **CI/스크립트는 영향 없음**, 로컬 zsh에서만 문제.
-- **deploy.sh**: Vercel 배포 스크립트. PR 자동 배포와 별개로 수동 배포 트리거할 때만 사용.
-- **Vercel Root Directory**: `web-prototype`로 설정되어야 함 (README 참조). 루트로 잘못 설정하면 빌드 실패.
+- **deploy.sh**: Mac mini 배포 스크립트. 태그 checkout → npm ci → build → docker 재기동. main 푸시로 자동 실행 X, 릴리스 태그 발행 후 수동 실행.
 - **모바일 우선**: 입력/UI/세션 길이 모두 모바일 기준. PC 데스크탑 입력에 최적화하지 말 것.
 - **.gstack 디렉토리**: 사용자 환경(gstack 도구) 캐시. 수정 금지.
 
@@ -321,9 +323,8 @@ bash scripts/setup-domain.sh yndl.dev
 - `자국-프로젝트-분석.md` — 프로젝트 분석
 - `웹-프로토타입-구현-기획안.md` — 구현 기획안
 - `자국-동료살리기-밸런스.md` — 밸런스 노트
-- `README.md` — 인프라/CI/Vercel 가이드
+- `README.md` — 인프라/CI 가이드
 - `CLOUDFLARE_TUNNEL_SETUP.md` — Cloudflare 터널 (선택)
-- `VERCEL_DEPLOY.md` — Vercel 배포 상세
 
 ## 작업 흐름 (OpenCode 세션이 따라야 할 패턴)
 

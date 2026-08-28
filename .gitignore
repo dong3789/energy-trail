@@ -50,3 +50,7 @@ Thumbs.db
 .nuxt/
 .svelte-kit/
 .gstack/
+
+# 사용자 환경 캐시 (수정 금지)
+.codegraph/
+.omo/
