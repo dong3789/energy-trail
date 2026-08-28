@@ -19,10 +19,15 @@ ok() { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m⚠\033[0m %s\n" "$*"; }
 err() { printf "\033[1;31m✗\033[0m %s\n" "$*" >&2; }
 
-# launchd/Actions 환경에는 osxkeychain 프롬프트가 없다. GITHUB_TOKEN이 있으면 그걸 쓴다.
+# launchd에는 osxkeychain 프롬프트가 없다. bearer extraheader는 GitHub가 거절한다.
 git_net() {
   if [ -n "${GITHUB_TOKEN:-}" ]; then
-    git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" "$@"
+    local auth
+    auth="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | openssl base64 -A)"
+    git -c credential.helper= \
+      -c credential.https://github.com.helper= \
+      -c "http.extraHeader=AUTHORIZATION: basic ${auth}" \
+      "$@"
   else
     git "$@"
   fi
