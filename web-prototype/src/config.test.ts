@@ -65,10 +65,23 @@ describe('config invariants', () => {
   });
 
   describe('GAME 밸런스', () => {
-    it('tagger가 runner를 따라잡을 수 있는 속도 (tagger speed > runner max speed)', () => {
+    // 2026-08-28: 동속도 밸런스 — 기본 속도는 전 역할 동일, 흡수 부스트만이 격차를 만든다.
+    it('동속도 원칙: 술래는 도망자 스프린트보다 약간 빠르거나 같다 (격차 10% 이내)', () => {
       const runnerMaxSpeed = GAME.baseSpeed * SPEED_TIERS.sprint.multiplier;
-      const taggerSpeed = GAME.baseSpeed * GAME.taggerPatrolSpeedMultiplier;
-      expect(taggerSpeed).toBeGreaterThan(runnerMaxSpeed);
+      const taggerSpeed =
+        GAME.baseSpeed * SPEED_TIERS.run.multiplier * GAME.taggerPatrolSpeedMultiplier;
+      expect(taggerSpeed).toBeLessThan(runnerMaxSpeed * 1.1);
+    });
+
+    it('흡수 부스트가 유일한 도주 수단 — 부스트 중 도망자는 술래보다 확실히 빠르다', () => {
+      const taggerSpeed =
+        GAME.baseSpeed * SPEED_TIERS.run.multiplier * GAME.taggerPatrolSpeedMultiplier;
+      const boostedRunner =
+        GAME.baseSpeed *
+        SPEED_TIERS.sprint.multiplier *
+        1.3 * // AI 도망자 배율 (RunnerAIStub.baseSpeed)
+        GAME.absorbedSpeedMultiplier;
+      expect(boostedRunner).toBeGreaterThan(taggerSpeed * 1.15);
     });
 
     it('taggerContactDistance가 캡슐 두 개 반경 합보다 커서 코너에 몰아도 OUT', () => {
@@ -107,15 +120,13 @@ describe('config invariants', () => {
       expect(GAME.taggerLoseRange).toBeGreaterThan(GAME.taggerDetectRange);
     });
 
-    it('AI 술래는 스프린트보다 조금 빠르고 플레이어 술래보다는 느리다', () => {
+    // 2026-08-28: 동속도 밸런스 — AI 술래도 도망자와 같은 배율(1.3). 직선 추적 AI라
+    // 사람보다 강한 건 허용하되 스프린트 도망자는 최소한 못 따라잡는 수준까지 낮춤.
+    it('AI 술래는 도망자와 동속도 배율이며 스프린트 도망자를 못 따라잡는다', () => {
       const runnerSprint = GAME.baseSpeed * SPEED_TIERS.sprint.multiplier;
-      const runnerRun = GAME.baseSpeed * SPEED_TIERS.run.multiplier;
       const ai = GAME.baseSpeed * SPEED_TIERS.run.multiplier * GAME.taggerAiChaseMultiplier;
-      const playerTagger =
-        GAME.baseSpeed * SPEED_TIERS.run.multiplier * GAME.taggerPatrolSpeedMultiplier;
-      expect(ai).toBeGreaterThan(runnerRun);
-      expect(ai).toBeGreaterThan(runnerSprint);
-      expect(ai).toBeLessThan(playerTagger);
+      expect(GAME.taggerAiChaseMultiplier).toBe(GAME.taggerPatrolSpeedMultiplier);
+      expect(ai).toBeLessThanOrEqual(runnerSprint * 1.05);
     });
 
     it('연막은 몇 초 유지되고 끝난 뒤 술래가 바로 못 잡는다', () => {

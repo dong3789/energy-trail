@@ -32,7 +32,9 @@ export class RunnerAIStub {
   private readonly fleeDistance = 9.0;
   // 2026-08-15 v2: 1.2× → 1.4× — AI 도망자가 술래(2.4×=15.1 m/s)한테 너무 쉽게 잡힘
   // 2026-08-15 v8: 술래 1.9배 — AI 도망자 8.8 m/s는 1.36배 느림 → 도주 가능
-  private readonly baseSpeed = GAME.baseSpeed * SPEED_TIERS.run.multiplier * 1.4;
+  // 2026-08-28: 동속도 밸런스 — AI 도망자 1.4 → 1.3으로 술래(1.3배=8.19)와 완전 동일 속도.
+  //   플레이어 도망자 스프린트(8.10)와도 실질 동일. 흡수 부스트만이 속도 우위.
+  private readonly baseSpeed = GAME.baseSpeed * SPEED_TIERS.run.multiplier * 1.3;
   private extraSpeedMul = 1.0;
 
   setExtraSpeedMul(mul: number): void {
