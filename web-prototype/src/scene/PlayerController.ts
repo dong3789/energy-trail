@@ -215,8 +215,8 @@ export class PlayerController {
     const targetR = this.input.right;
     const isInputActive = Math.abs(targetF) > 0.01 || Math.abs(targetR) > 0.01;
     const lerpRate = isInputActive ? this.accelLerp : this.decelLerp;
-    this.smoothInputF += (targetF - this.smoothInputF) * lerpRate;
-    this.smoothInputR += (targetR - this.smoothInputR) * lerpRate;
+    this.smoothInputF += (targetF - this.smoothInputF) * Math.min(1, lerpRate * dt * 60);
+    this.smoothInputR += (targetR - this.smoothInputR) * Math.min(1, lerpRate * dt * 60);
     // 미세 잔여값 0으로 스냅
     if (Math.abs(this.smoothInputF) < 0.005 && !isInputActive) this.smoothInputF = 0;
     if (Math.abs(this.smoothInputR) < 0.005 && !isInputActive) this.smoothInputR = 0;

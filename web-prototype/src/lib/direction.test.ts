@@ -164,25 +164,30 @@ describe('direction', () => {
   });
 
   describe('shotAimXZ', () => {
-    it('1인칭은 camYaw가 0이어도 시선 방향으로 쏜다 (달리며 몸 돌린 뒤)', () => {
-      const dir = shotAimXZ({ firstPerson: true, lookX: 1, lookZ: 0, camYaw: 0 });
-      expect(dir.x).toBeCloseTo(1, 5);
-      expect(dir.z).toBeCloseTo(0, 5);
+    it('항상 캐릭터 정면(look)으로 쏜다 — 달리며 몸 돌린 뒤에도', () => {
+      const east = shotAimXZ({ firstPerson: true, lookX: 1, lookZ: 0, camYaw: 0 });
+      expect(east.x).toBeCloseTo(1, 5);
+      expect(east.z).toBeCloseTo(0, 5);
+      const east3p = shotAimXZ({ firstPerson: false, lookX: 1, lookZ: 0, camYaw: 0 });
+      expect(east3p.x).toBeCloseTo(1, 5);
+      expect(east3p.z).toBeCloseTo(0, 5);
     });
 
-    it('1인칭 스폰 시선(-Z)은 앞으로', () => {
+    it('스폰 시선(-Z)은 앞으로', () => {
       const dir = shotAimXZ({ firstPerson: true, lookX: 0, lookZ: -1, camYaw: 0 });
       expect(dir.x).toBeCloseTo(0, 5);
       expect(dir.z).toBeCloseTo(-1, 5);
     });
 
-    it('3인칭은 카메라 yaw (0 = -Z, +π/2 = -X)', () => {
-      const front = shotAimXZ({ firstPerson: false, lookX: 1, lookZ: 0, camYaw: 0 });
-      expect(front.x).toBeCloseTo(0, 5);
-      expect(front.z).toBeCloseTo(-1, 5);
-      const left = shotAimXZ({ firstPerson: false, lookX: 0, lookZ: -1, camYaw: Math.PI / 2 });
-      expect(left.x).toBeCloseTo(-1, 5);
-      expect(left.z).toBeCloseTo(0, 5);
+    it('camYaw는 무시된다 (카메라가 따로 돌아도 캐릭터 정면)', () => {
+      const dir = shotAimXZ({ firstPerson: false, lookX: 1, lookZ: 0, camYaw: Math.PI / 2 });
+      expect(dir.x).toBeCloseTo(1, 5);
+      expect(dir.z).toBeCloseTo(0, 5);
+    });
+
+    it('대각 시선은 정규화된다', () => {
+      const dir = shotAimXZ({ firstPerson: true, lookX: 1, lookZ: -1, camYaw: 0 });
+      expect(Math.hypot(dir.x, dir.z)).toBeCloseTo(1, 5);
     });
   });
 });

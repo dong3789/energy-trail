@@ -778,7 +778,7 @@ function renderLobby(): void {
   content.className = 'screen screen-lobby';
   content.innerHTML = `
     <div class="lobby-eyebrow">로비 · <span class="muted">${escapeHtml(profile.nickname)}님</span></div>
-    <h1 class="lobby-title">로비 <span class="intro-version">${escapeHtml(APP_VERSION)}</span></h1>
+    <h1 class="lobby-title">로비</h1>
     <p class="lobby-sub">방에 들어가면 대기실에서 술래를 정합니다.</p>
     ${
       inviteCode && !inviteConsumed
@@ -1573,6 +1573,13 @@ function renderGame(): void {
     disposeShot();
     disposeNetZone();
   });
+
+  // 2026-08-28: 게임 중 화면이 통째로 드래그되는 현상 차단
+  // - 텍스트 롱프레스 선택/콜아웃이 캔버스 위 제스처로 이어지지 않게
+  // - 안전빨: 더블탭 줌도 차단
+  const blockGestures = (e: Event): void => e.preventDefault();
+  addTrackedListener(canvasHost, 'selectstart', blockGestures);
+  addTrackedListener(document, 'gesturestart', blockGestures);
 
   // 우클릭 컨텍스트 메뉴 차단 (드래그용)
   addTrackedListener(canvasHost, 'contextmenu', (e: Event) => (e as MouseEvent).preventDefault());
@@ -2558,13 +2565,11 @@ function renderGame(): void {
     ctx.scene.add(aimLaser);
   }
 
-  // 그물 조준: 1인칭은 mesh 시선(달리며 돌아도 화면 앞), 3인칭은 카메라 yaw
+  // 그물 조준: 항상 캐릭터 정면 (1인칭/3인칭 공통 — mesh local -Z)
   function getAimDirection(): THREE.Vector3 {
     const look = new THREE.Vector3();
-    if (SCENE.firstPerson) {
-      selfMesh.getWorldDirection(look);
-      applyFaceDirFromWorldDir(look);
-    }
+    selfMesh.getWorldDirection(look);
+    applyFaceDirFromWorldDir(look);
     const xz = shotAimXZ({
       firstPerson: SCENE.firstPerson,
       lookX: look.x,

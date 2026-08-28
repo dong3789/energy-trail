@@ -94,10 +94,9 @@ export function firstPersonYawInput(left: boolean, right: boolean): number {
 }
 
 /**
- * 그물 발사 XZ 방향.
- * - 1인칭: 시선(look, local -Z) — 달리면서 쏴도 화면 앞.
- * - 3인칭: 카메라 yaw (0 = -Z).
- * camYaw만 쓰면 1인칭에서 몸을 돌린 뒤에도 월드 -Z로 나간다.
+ * 그물 발사 XZ 방향 — 항상 캐릭터 정면 (mesh local -Z, 평탄화).
+ * 카메라 yaw는 쓰지 않는다: 1인칭에서 몸을 돌려도 정면, 3인칭에서도
+ * 캐릭터가 서 있는 방향 기준 (요구사항: 그물은 캐릭터 정면).
  */
 export function shotAimXZ(opts: {
   firstPerson: boolean;
@@ -105,9 +104,7 @@ export function shotAimXZ(opts: {
   lookZ: number;
   camYaw: number;
 }): { x: number; z: number } {
-  if (opts.firstPerson) {
-    const b = cameraMoveBasis(opts.lookX, opts.lookZ);
-    return { x: b.forwardX, z: b.forwardZ };
-  }
-  return { x: -Math.sin(opts.camYaw), z: -Math.cos(opts.camYaw) };
+  void opts.camYaw;
+  const b = cameraMoveBasis(opts.lookX, opts.lookZ);
+  return { x: b.forwardX, z: b.forwardZ };
 }
