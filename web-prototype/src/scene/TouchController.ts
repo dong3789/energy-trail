@@ -4,7 +4,7 @@
 // - 조이스틱을 떼면 자동으로 0으로 복귀
 // - PlayerController.setInput(forward, right)를 호출해 직접 입력 주입
 
-import { LOOK_STICK, lookAxesFromDelta } from '../lib/look-stick';
+import { LOOK_STICK, lookAxesFromDelta, moveAxesFromPointerDelta } from '../lib/look-stick';
 
 export interface JoystickOptions {
   host: HTMLElement; // 조이스틱을 붙일 부모 (보통 game-canvas-wrap)
@@ -138,22 +138,8 @@ export class Joystick {
     // 노브 위치 (단위: px, 좌상단 0,0 기준)
     this.updateKnobVisual(nx, ny);
 
-    // 정규화 (-1 ~ 1)
-    const normalizedX = nx / maxDist;
-    const normalizedY = ny / maxDist;
-
-    // Y는 화면 좌표계에서 아래가 +이므로 입력 Y는 부호 반전
-    // - 화면 위 = -Y → forward(전진) = +1
-    // - 화면 아래 = +Y → backward = -1
-    // input.forward: W=+1 (앞), S=-1 (뒤) → 위쪽 드래그 = +1
-    const forward = -normalizedY;
-    const right = normalizedX;
-
-    // 데드존 (5% 이내 0)
-    const deadzone = 0.08;
-    const f = Math.abs(forward) < deadzone ? 0 : forward;
-    const r = Math.abs(right) < deadzone ? 0 : right;
-
+    // Y는 화면 좌표계에서 아래가 +이므로 입력 Y는 부호 반전 (W=+1)
+    const { forward: f, right: r } = moveAxesFromPointerDelta(nx, ny, maxDist);
     this.currentF = f;
     this.currentR = r;
     this.onChange(f, r);

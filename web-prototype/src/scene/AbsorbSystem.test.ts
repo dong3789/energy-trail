@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { AbsorbSystem, type AbsorbEvent } from './AbsorbSystem';
+import {
+  AbsorbSystem,
+  botShouldAbsorbTrails,
+  botTrailAbsorbHoldSeconds,
+  type AbsorbEvent,
+} from './AbsorbSystem';
 import { GAME } from '../config';
 
 // 2026-08-25: 자국 흡수 = 즉시 (1초 hold 없음)
@@ -274,5 +279,37 @@ describe('AbsorbSystem (자국 흡수 — 즉시 흡수 모드)', () => {
       absorb.reset();
       expect(absorb.isCurrentlyInvulnerable()).toBe(false);
     });
+  });
+});
+
+describe('bot trail absorb (AI must not vacuum trailGoal in a few frames)', () => {
+  it('instant 흡수(0s)여도 봇은 매 프레임 가져가지 않는다', () => {
+    const hold = botTrailAbsorbHoldSeconds(0, 4);
+    expect(hold).toBeGreaterThan(0.2);
+    let absorbed = 0;
+    let absorbHold = 0;
+    const dt = 1 / 60;
+    for (let f = 0; f < 8; f++) {
+      absorbHold += dt;
+      if (absorbHold >= hold) {
+        absorbed += 1;
+        absorbHold = 0;
+      }
+    }
+    expect(absorbed).toBe(0);
+  });
+
+  it('플레이어 쿨다운(4s)을 봇 hold로 써서 한 방에 trailGoal을 못 채운다', () => {
+    const hold = botTrailAbsorbHoldSeconds(GAME.absorbSeconds, GAME.absorbCooldownSeconds);
+    expect(hold).toBeGreaterThanOrEqual(GAME.absorbCooldownSeconds);
+    const framesToGoal = Math.ceil(GAME.trailGoal / 1);
+    expect(hold * framesToGoal).toBeGreaterThan(1);
+  });
+
+  it('remote 도망자는 로컬에서 자국 점수를 올리지 않는다', () => {
+    expect(botShouldAbsorbTrails('remote', 'runner', false)).toBe(false);
+    expect(botShouldAbsorbTrails('ai', 'runner', false)).toBe(true);
+    expect(botShouldAbsorbTrails('ai', 'tagger', false)).toBe(false);
+    expect(botShouldAbsorbTrails('ai', 'runner', true)).toBe(false);
   });
 });

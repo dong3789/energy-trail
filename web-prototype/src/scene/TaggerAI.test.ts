@@ -71,13 +71,7 @@ describe('TaggerAI (술래 AI 추격)', () => {
       // heading을 (0,-1)로 강제 (AI가 -Z로 추적 중)
       target.position.set(0, 0, -1);
       ai.update(0.01);
-      // Euler Y 회전: 0 = 정면(-Z)
-      const angle = Math.atan2(-mesh.quaternion.x, -mesh.quaternion.z) * 2;
-      // slerp로 인해 정확히 0은 아닐 수 있지만, |angle| < π/2 (정면 부근)여야 함
-      // 0 또는 ±π 둘 다 정면(-Z)을 의미
-      // → 잘못된 공식을 쓰면 angle ≈ π
       const euler = new THREE.Euler().setFromQuaternion(mesh.quaternion, 'YXZ');
-      // euler.y는 0 근처여야 함 (정면 -Z)
       expect(Math.abs(euler.y)).toBeLessThan(0.1); // 정면 (Y=0)에 가까움
     });
 

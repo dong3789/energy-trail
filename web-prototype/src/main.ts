@@ -24,19 +24,30 @@ import { Joystick, LookStick, isMobileLike } from './scene/TouchController';
 import { addCharacterFeatures } from './scene/CharacterFactory';
 import { DustSystem } from './scene/DustSystem';
 import { SoundManager } from './scene/SoundManager';
-import { AbsorbSystem } from './scene/AbsorbSystem';
+import {
+  AbsorbSystem,
+  botShouldAbsorbTrails,
+  botTrailAbsorbHoldSeconds,
+} from './scene/AbsorbSystem';
 import { ItemField } from './scene/ItemField';
-import { ITEM_META, type ItemKind } from './lib/items';
+import { ITEM_META, magnetTakeCount, type ItemKind } from './lib/items';
 import { escapeHtml } from './lib/html-escape';
+import { appVersionLabel } from './lib/app-version';
+import { RemotePlayerSync, slerpYaw } from './lib/sync';
 import { countdownFromElapsed, firstCountdownPaint, effectiveElapsedMs } from './lib/countdown';
-import { attachWorldLabel } from './lib/follow-label';
-import { chaseYawFromMovement, shortestAngle, wrapAngle } from './lib/direction';
-import { lookDeltaFromAxes } from './lib/look-stick';
+import { attachWorldLabel, shouldAttachPlayerLabel } from './lib/follow-label';
+import {
+  applyFaceDirFromWorldDir,
+  chaseYawFromMovement,
+  shortestAngle,
+  shotAimXZ,
+  wrapAngle,
+} from './lib/direction';
+import { firstPersonYawFromLookAxes, lookDeltaFromAxes } from './lib/look-stick';
 import { retryScreenForEntry, shouldTeardownGame, type MatchEntryMode } from './lib/match-flow';
 import {
   canEnterWithCode,
   isCompleteRoomCode,
-  lookupRoom,
   normalizeRoomCode,
   pruneRooms,
   upsertRoom,
@@ -52,10 +63,11 @@ import {
 } from './lib/chase';
 import { matchSpawns } from './lib/spawn-layout';
 import { NetClient, type NetPeer, wsUrlFromLocation } from './lib/net';
-import { MAX_RECONNECT_ATTEMPTS, decideReconnect, waitBeforeNextAttempt } from './lib/reconnect';
+import { MAX_RECONNECT_ATTEMPTS, waitBeforeNextAttempt } from './lib/reconnect';
 import { reconnectFlow, type AttemptResult } from './lib/reconnect-flow';
 import { serverEpochToClientPerf } from './lib/time-sync';
 import { judgeTrailRound } from './lib/round-rules';
+import { applyVisualViewportVars, requestGameFullscreen } from './lib/fullscreen';
 import {
   assignRoles,
   buildSoloSeats,
@@ -241,6 +253,8 @@ const characters: Array<{ id: CharacterId; label: string; color: string }> = [
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('앱 컨테이너를 찾을 수 없습니다.');
 const root = app;
+const APP_VERSION = appVersionLabel(import.meta.env.VITE_APP_VERSION);
+applyVisualViewportVars();
 
 let screen: Screen = 'intro';
 const profile: Profile = {
@@ -257,6 +271,30 @@ let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
 let roomJoined = true;
 let matchEntry: MatchEntryMode = 'solo';
+// 2026-08-28: 세션 토큰 영속화 — 탭 재시작/새로고침 후에도 같은 좌석(방장)으로 복귀
+const SESSION_TOKEN_KEY = 'energy-trail-session-token-v1';
+let sessionToken = '';
+try {
+  sessionToken = localStorage.getItem(SESSION_TOKEN_KEY) ?? '';
+} catch {
+  sessionToken = '';
+}
+function saveSessionToken(token: string): void {
+  sessionToken = token;
+  try {
+    localStorage.setItem(SESSION_TOKEN_KEY, token);
+  } catch {
+    /* private mode */
+  }
+}
+function clearSessionToken(): void {
+  sessionToken = '';
+  try {
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 // 2026-08-25: 클래식 모드 — 아이템 없이 체급(순수 실력)으로만 하는 모드
 let gameMode: 'items' | 'classic' = 'items';
 // 2026-08-25: 초대 링크 — ?room=CODE 로 공유된 링크를 탭하면 해당 방으로 자동 입장
@@ -283,8 +321,12 @@ async function ensureNet(): Promise<NetClient | null> {
     return null;
   }
   net = client;
+  // 2026-08-28: welcome에서 내려온 토큰을 영속화 — 다음 resume에 사용
+  client.onWelcome = () => {
+    if (client.token) saveSessionToken(client.token);
+  };
   // 2026-08-25: 연결 끊김 시 —
-  // 멀티플레이: 5초 카운트다운 후 같은 방 코드로 자동 재연결 시도 (최대 5회, exponential).
+  // 멀티플레이: 같은 방 코드로 자동 재연결 (resume → join 폴백).
   //           사용자가 cancel 누르면 즉시 로비. 마지막 시도도 실패 시 명시적 로비.
   // 솔로: 게임을 유지하고 다음 ensureNet 호출에서 재연결 (기존 동작).
   client.onDisconnect = () => {
@@ -356,6 +398,9 @@ async function tryAutoReconnect(code: string): Promise<void> {
 
   // 2026-08-25: 핵심 흐름은 lib/reconnect-flow의 reconnectFlow에 위임.
   // main.ts는 DOM/UI/상태 관리만 담당.
+  // 2026-08-28: resume-first — 저장된 세션 토큰이 있으면 같은 좌석(방장/신원) 복원을
+  // 먼저 시도하고, resumeDenied면 기존 join으로 폴백. 성공한 client는 net에 할당.
+  let liveClient: NetClient | null = null;
   const outcome = await reconnectFlow(code, profile, {
     attempt: async (joinCode, p): Promise<AttemptResult> => {
       // 기존 net 참조 정리 (이미 끊긴 상태)
@@ -367,6 +412,14 @@ async function tryAutoReconnect(code: string): Promise<void> {
         }
         net = null;
       }
+      if (liveClient) {
+        try {
+          liveClient.close();
+        } catch {
+          /* ignore */
+        }
+        liveClient = null;
+      }
       const client = new NetClient();
       const ok = await client.connect(wsUrlFromLocation(window.location));
       if (!ok) return { phase: 'failed' };
@@ -374,7 +427,7 @@ async function tryAutoReconnect(code: string): Promise<void> {
       client.onDisconnect = () => {
         /* reconnect 흐름이 관리 */
       };
-      // hello + join 응답 대기
+      // hello + (resume | join) 응답 대기
       const phase = await new Promise<'lobby' | 'playing' | 'failed'>((resolve) => {
         let resolved = false;
         const finish = (r: 'lobby' | 'playing' | 'failed'): void => {
@@ -387,6 +440,14 @@ async function tryAutoReconnect(code: string): Promise<void> {
           else finish('playing');
         };
         client.onError = () => finish('failed');
+        client.onResumeDenied = () => {
+          // 토큰 만료/좌석 소멸 — 일반 join으로 폴백
+          try {
+            client.join(joinCode);
+          } catch {
+            finish('failed');
+          }
+        };
         window.setTimeout(() => finish('failed'), 4000);
         try {
           client.hello({
@@ -395,7 +456,8 @@ async function tryAutoReconnect(code: string): Promise<void> {
             wish: p.roleWish,
             map: p.mapId,
           });
-          client.join(joinCode);
+          if (sessionToken) client.resume(sessionToken);
+          else client.join(joinCode);
         } catch {
           finish('failed');
         }
@@ -404,8 +466,9 @@ async function tryAutoReconnect(code: string): Promise<void> {
         // 다음 시도 또는 abort 시 close
         return { phase, ws: { close: () => client.close() } };
       }
-      // 성공 — 호출자가 net에 할당할 수 있게 ws 핸들 보존
-      return { phase: 'lobby', ws: { close: () => client.close() } };
+      // 성공 — 이 client를 net으로 승격 (중복 join 방지)
+      liveClient = client;
+      return { phase: 'lobby' };
     },
     closeAttempt: (ws) => {
       try {
@@ -447,15 +510,14 @@ async function tryAutoReconnect(code: string): Promise<void> {
     onTerminal: (o, attempts) => {
       cleanup();
       if (o === 'ok') {
-        // 재연결 성공 — 마지막 attempt의 ws는 호출자가 net에 이미 할당하지 않은 상태.
-        // (재연결 흐름은 closeAttempt 정책상 성공 시 ws를 닫지 않지만, 우리가 닫아도 됨)
-        // 단, lobby 응답의 client를 net에 할당해야 다음 게임 진행 가능.
-        // → 마지막 attempt에서 phase='lobby'인 client를 별도로 보존해 net에 할당.
-        // (간단화: lobby 결과 후 net=null이므로 ensureNet 다음 호출에서 재연결)
-        // → 더 안전: lobby 시 client를 별도 변수로 보관했다가 할당
+        // 2026-08-28: 성공한 client를 net에 승격 — 안전망의 중복 join을 막고
+        // 같은 좌석(방장/신원)으로 room 화면 진입.
+        if (liveClient) {
+          net = liveClient;
+          liveClient = null;
+        }
         showNetToast(`재연결 성공 (${attempts}회 시도)`);
-        // 마지막 성공 client를 net에 할당하려면 attempt에서 보관 필요.
-        // 여기서는 사용자에게 성공 알림 + 화면 갱신 (room 진입)
+        roomJoined = true;
         setScreen('room');
       } else if (o === 'abort') {
         msg.textContent = `재연결 실패 (${MAX_RECONNECT_ATTEMPTS}회). 로비로 돌아갑니다.`;
@@ -467,9 +529,8 @@ async function tryAutoReconnect(code: string): Promise<void> {
       // cancelled는 cancelBtn 핸들러에서 이미 처리
     },
   });
-  // 종료 후 lobby 결과로 net 할당이 안 된 경우 안전망
+  // 안전망 — 성공했는데 net 승격이 안 된 경우에만 재진입 (중복 join 방지)
   if (outcome === 'ok' && !net?.connected) {
-    // 다음 ensureNet에서 새 ws로 재진입
     void ensureNet().then((c) => {
       if (c) {
         c.hello({
@@ -478,7 +539,8 @@ async function tryAutoReconnect(code: string): Promise<void> {
           wish: profile.roleWish,
           map: profile.mapId,
         });
-        c.join(code);
+        if (sessionToken) c.resume(sessionToken);
+        else c.join(code);
       }
     });
   }
@@ -583,6 +645,7 @@ function trackTimeout(callback: () => void, ms: number): number {
 }
 
 function setScreen(next: Screen): void {
+  if (next === 'game') void requestGameFullscreen(document.documentElement);
   if (shouldTeardownGame(screen, next)) {
     try {
       teardownGame();
@@ -609,6 +672,8 @@ function setScreen(next: Screen): void {
 }
 
 function leaveToLobby(): void {
+  // 2026-08-28: 명시적 로비 복귀 — 의도적 이탈이므로 좌석 보존 세션을 폐기
+  if (sessionToken) clearSessionToken();
   net?.close();
   net = null;
   roomJoined = matchEntry !== 'room';
@@ -639,13 +704,6 @@ function button(label: string, action: () => void, className = ''): HTMLButtonEl
   return element;
 }
 
-function panel(title: string, subtitle: string): HTMLElement {
-  const element = document.createElement('section');
-  element.className = 'panel';
-  element.innerHTML = `<p class="eyebrow">ENERGY TRAIL</p><h1>${title}</h1><p class="subtitle">${subtitle}</p>`;
-  return element;
-}
-
 // ============================================================
 // 2026-08-15 v29: 게임 준비화면 전면 개편
 // - 디자인 원칙: 명확한 시각 계층, 컬러 일관성, 친근한 빈 상태
@@ -661,7 +719,7 @@ function renderIntro(): void {
   // 2026-08-15 v29: 자국 — 드라마틱 인트로
   content.innerHTML = `
     <div class="intro-eyebrow">ENERGY TRAIL</div>
-    <h1 class="intro-title">자국</h1>
+    <h1 class="intro-title">자국 <span class="intro-version">${escapeHtml(APP_VERSION)}</span></h1>
     <p class="intro-tagline">술래가 흘린 흔적을 뒤집어쓰고,<br/>어둠을 빠져나가세요.</p>
     <div class="intro-trail" aria-hidden="true">
       <span class="intro-trail-dot"></span>
@@ -678,7 +736,10 @@ function renderIntro(): void {
     <button type="button" class="button primary intro-cta">시작하기</button>
   `;
   const cta = content.querySelector<HTMLButtonElement>('.intro-cta');
-  cta?.addEventListener('click', () => setScreen('login'));
+  cta?.addEventListener('click', () => {
+    void requestGameFullscreen(document.documentElement);
+    setScreen('login');
+  });
   root.append(content);
 }
 
@@ -1256,7 +1317,13 @@ function renderRoom(): void {
       const client = await ensureNet();
       if (!client) {
         const status = content.querySelector('.room-code-status');
-        if (status) status.textContent = '서버 연결 실패';
+        if (status) {
+          // 2026-08-25: 에러에 원인/조치 포함 — ws 서버 미실행 or Vercel 정적 호스팅 등
+          status.textContent = '서버 연결 실패 · ws 서버를 켜세요: PORT=8791 node server/index.mjs';
+        }
+        console.error(
+          '[room] ws 연결 실패. 로컬이면 PORT=8791 node server/index.mjs 실행, 운영이면 VITE_WS_URL로 Fly.io 등 별도 호스트 지정 필요.',
+        );
         return;
       }
       netHello();
@@ -1359,8 +1426,9 @@ function renderGame(): void {
   };
   const CAM_LIMITS = {
     // 2026-08-15 v2: 0.005/0.004 → 0.0028/0.0023 — 드래그 감도 ↓ (확확 넘어감 방지)
+    // 2026-08-26: 0.0028 → 0.005 — 시야 회전 더 빠르게 (갑갑함 개선)
     // + smoothing (CAM_ROT_SMOOTHING) 동시 적용
-    yawSpeed: 0.0028,
+    yawSpeed: 0.005,
     pitchSpeed: 0.0023,
     pitchMin: -0.35,
     pitchMax: 0.85,
@@ -1370,7 +1438,8 @@ function renderGame(): void {
   };
   // 2026-08-15 v2: 카메라 회전 smoothing — target → actual lerp factor
   // (작을수록 부드럽게 따라옴, 클수록 즉각 반응)
-  const CAM_ROT_SMOOTHING = 0.18;
+  // 2026-08-26: 0.18 → 0.25 — 사용자가 "더 정확하고 빨리" 요청, 부드러움 유지하면서 반응 ~4 프레임
+  const CAM_ROT_SMOOTHING = 0.25;
 
   // 술래 그물망: 날아가며 벌어지고, 사거리 끝에서 바닥에 잠깐 남음
   const shotState = {
@@ -1530,13 +1599,7 @@ function renderGame(): void {
     shotState.originY = selfMesh.position.y + PLAYER.height * 0.45;
     shotOriginTmp.y = shotState.originY;
     shotState.position.copy(shotOriginTmp);
-    cameraFacing.set(0, 0, -1);
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const yawQ = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      cameraFacing.applyQuaternion(yawQ);
-    }
-    cameraFacing.y = 0;
-    shotState.direction.copy(cameraFacing).normalize();
+    shotState.direction.copy(getAimDirection());
     shotState.traveled = 0;
     const mesh = createNetVisual(GAME.shotRadius, false);
     mesh.position.copy(shotState.position);
@@ -1552,6 +1615,13 @@ function renderGame(): void {
     disposeShot();
     disposeNetZone();
   });
+
+  // 2026-08-28: 게임 중 화면이 통째로 드래그되는 현상 차단
+  // - 텍스트 롱프레스 선택/콜아웃이 캔버스 위 제스처로 이어지지 않게
+  // - 안전빨: 더블탭 줌도 차단
+  const blockGestures = (e: Event): void => e.preventDefault();
+  addTrackedListener(canvasHost, 'selectstart', blockGestures);
+  addTrackedListener(document, 'gesturestart', blockGestures);
 
   // 우클릭 컨텍스트 메뉴 차단 (드래그용)
   addTrackedListener(canvasHost, 'contextmenu', (e: Event) => (e as MouseEvent).preventDefault());
@@ -1900,9 +1970,6 @@ function renderGame(): void {
       }
     }, 3000);
   }
-  function hideActionPrompt(): void {
-    actionPrompt.classList.remove('show');
-  }
 
   // 2026-08-15 v4: 설정 버튼 (우상단) — 일시정지 메뉴 진입
   const settingsBtn = document.createElement('button');
@@ -1912,6 +1979,17 @@ function renderGame(): void {
   settingsBtn.innerHTML = '⚙';
   settingsBtn.addEventListener('click', () => showPauseMenu());
   wrap.appendChild(settingsBtn);
+  const fsBtn = document.createElement('button');
+  fsBtn.type = 'button';
+  fsBtn.className = 'icon-btn fs-btn';
+  fsBtn.setAttribute('aria-label', '전체화면');
+  fsBtn.textContent = '⛶';
+  fsBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void requestGameFullscreen(document.documentElement);
+  });
+  wrap.appendChild(fsBtn);
 
   // 뒤로가기 버튼 (우상단) — 숨김 (일시정지 메뉴가 생겼으므로)
   const back = button('← 로비', () => leaveToLobby(), 'ghost game-back');
@@ -1985,7 +2063,6 @@ function renderGame(): void {
   game.exitDisc = exitDisc;
   // 출구 위치 (XZ 평면, Y 무시)
   const exitPos = new THREE.Vector3(exitDisc.position.x, 0, exitDisc.position.z);
-  const exitRadius = 1.4; // buildExitPoint의 CylinderGeometry radius와 일치
 
   const mapHalfW = MAP.width / 2 - MAP.wallThickness;
 
@@ -2112,9 +2189,12 @@ function renderGame(): void {
     showResult(judged.winner, judged.reason);
     return true;
   };
+  // 2026-08-25: 멀티 점수 배치 — 서버 레이트 리밋(250ms) 대응, 렌더 루프에서 300ms 간격 플러시
+  let pendingNetScore = 0;
+  let lastScoreSentAt = 0;
   const addTrailScore = (n = 1): void => {
     if (matchEntry === 'room' && net?.connected) {
-      net.sendScore();
+      pendingNetScore += n;
       return;
     }
     roundStats.absorbed += n;
@@ -2288,6 +2368,7 @@ function renderGame(): void {
     }
     game.out = true;
     resultOverlay.classList.add('show');
+    wrap.querySelector('.spectate-chip')?.classList.remove('show');
   }
   const mapHalfD = MAP.depth / 2 - MAP.wallThickness;
   game.out = false;
@@ -2349,6 +2430,10 @@ function renderGame(): void {
     );
     selfMesh.position.set(0, PLAYER.height / 2, 0);
     selfMesh.castShadow = true;
+    // 2026-08-27: PR #13에서 rotation.y = PI 추가했으나 mesh forward를 +Z로 만들어서
+    // 모바일 charRight = cross(+Z, +Y) = -X → 좌/우 이동이 반대로 됨. PR #11 v1
+    // (identity)에서는 charRight = cross(-Z, +Y) = +X (정상). 표준 forward(-Z)로 복원.
+    // 1인칭 yaw 부호는 PlayerController.firstPersonYawInput (카메라 look 기준)
   }
   ctx.scene.add(selfMesh);
   // 2026-08-15: 머리/후드/눈 추가
@@ -2418,7 +2503,13 @@ function renderGame(): void {
     addCharacterFeatures(mesh, { isTagger: botIsTagger, bodyColor: botColor });
     const remote = net?.players.find((p) => p.id === seat.id);
     const isRemote = Boolean(remote) || liveIds.has(seat.id);
-    if (PLAYER.showPlayerLabels) {
+    if (
+      shouldAttachPlayerLabel({
+        showPlayerLabels: PLAYER.showPlayerLabels,
+        isSelf: false,
+        showSelfLabel: PLAYER.showSelfLabel,
+      })
+    ) {
       addPlayerLabel(
         mesh,
         remote?.name ?? (botIsTagger ? 'AI 술래' : `AI ${i + 1}`),
@@ -2512,14 +2603,18 @@ function renderGame(): void {
     ctx.scene.add(aimLaser);
   }
 
-  // aim 방향 계산 (cameraFacing + yaw)
+  // 그물 조준: 항상 캐릭터 정면 (1인칭/3인칭 공통 — mesh local -Z)
   function getAimDirection(): THREE.Vector3 {
-    const dir = new THREE.Vector3(0, 0, -1);
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const q = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      dir.applyQuaternion(q);
-    }
-    return dir.normalize();
+    const look = new THREE.Vector3();
+    selfMesh.getWorldDirection(look);
+    applyFaceDirFromWorldDir(look);
+    const xz = shotAimXZ({
+      firstPerson: SCENE.firstPerson,
+      lookX: look.x,
+      lookZ: look.z,
+      camYaw: camState.yaw,
+    });
+    return look.set(xz.x, 0, xz.z);
   }
 
   // === PlayerController (자기) ===
@@ -2534,6 +2629,8 @@ function renderGame(): void {
     speedMultiplier: isTagger ? GAME.taggerPatrolSpeedMultiplier : 1.0, // v8: 술래 1.9배
   });
   if (!isTagger) player.setSpeedTier('sprint');
+  // 2026-08-27: 1인칭 모드 — ←/→ 키로 yaw 회전, mesh 자동 회전 OFF
+  player.setFirstPersonMode(SCENE.firstPerson);
   game.player = player;
   updateSpeedButtons('run');
 
@@ -2654,6 +2751,7 @@ function renderGame(): void {
   });
   // 2026-08-25: 신규 아이템 상태 — 자석/방어막/반전/로켓/투명/분신
   let magnetLeft = 0;
+  let magnetAbsorbed = 0;
   let shieldLeft = 0;
   let reversalLeft = 0;
   let rocketLeft = 0;
@@ -2814,6 +2912,7 @@ function renderGame(): void {
     }
   };
   const applyItem = (kind: ItemKind): void => {
+    if (isTagger) return; // 2026-08-26: 술래는 어떤 아이템도 사용 안 함
     if (kind === 'jelly') jellyLeft = GAME.itemJellyDuration;
     else if (kind === 'smoke') {
       smokeLeft = GAME.itemSmokeDuration;
@@ -2828,6 +2927,7 @@ function renderGame(): void {
       chasePrey = undefined;
     } else if (kind === 'magnet') {
       magnetLeft = GAME.itemMagnetDuration;
+      magnetAbsorbed = 0;
       magnetVisual.visible = true;
     } else if (kind === 'shield') {
       shieldLeft = GAME.itemShieldDuration;
@@ -2911,7 +3011,14 @@ function renderGame(): void {
   game.absorb = absorb;
 
   // 2026-08-09 v2: 머리 위에 캔버스 라벨 스프라이트
-  if (PLAYER.showPlayerLabels) {
+  // 1인칭에서 자기 닉네임은 시야를 가리므로 붙이지 않음 (남 플레이어만)
+  if (
+    shouldAttachPlayerLabel({
+      showPlayerLabels: PLAYER.showPlayerLabels,
+      isSelf: true,
+      showSelfLabel: PLAYER.showSelfLabel,
+    })
+  ) {
     addPlayerLabel(
       selfMesh,
       selfLabel,
@@ -2920,9 +3027,7 @@ function renderGame(): void {
       true,
     );
   }
-
   const taggerBot = bots.find((b) => b.role === 'tagger');
-  const taggerMeshRef = taggerBot?.mesh ?? null;
   const taggerMaterialRef = taggerBot?.material ?? null;
   const originalTaggerEmissive = taggerMaterialRef ? taggerMaterialRef.emissive.getHex() : 0;
   const originalTaggerIntensity = taggerMaterialRef ? taggerMaterialRef.emissiveIntensity : 0;
@@ -2935,6 +3040,8 @@ function renderGame(): void {
     },
     setTaggerFrozen: (frozen) => {
       if (taggerAI) taggerAI.setFrozen(frozen);
+      // 로컬이 술래면 (멀티에서 상대 얼림 수신) 입력도 막음
+      if (isTagger) player.setFrozen(frozen);
     },
     onTaggerVisual: (frozen) => {
       if (!taggerMaterialRef) return;
@@ -2948,19 +3055,30 @@ function renderGame(): void {
     },
   });
 
+  const tryIce = (): void => {
+    if (isTagger) return;
+    if (game.out) return;
+    const dist = distVecToTagger();
+    const deny = ice.denyReason(dist);
+    if (deny === 'range') {
+      sound.playAbsorbCancel();
+      if (iceStatus) iceStatus.textContent = '너무 멀다';
+      if (iceBtn) iceBtn.querySelector('.ice-btn-label')!.textContent = '멀다';
+      return;
+    }
+    if (ice.triggerIfReady(dist)) {
+      sound.playIce();
+      if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
+      roundStats.iceUsed += 1;
+      if (matchEntry === 'room') net?.sendIce();
+    }
+  };
+
   // F 키로 얼림 발동 (도망자만)
   const iceKeyHandler = (e: KeyboardEvent): void => {
     if (e.repeat) return;
     if (e.code !== 'KeyF') return;
-    if (isTagger) return; // 술래는 얼림 사용 불가
-    if (game.out) return;
-    const dist = distVecToTagger();
-    if (ice.triggerIfReady(dist)) {
-      sound.playIce();
-      // 2026-08-15: 술래 위치에 서리 버스트 (얼음 파티클)
-      if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
-      roundStats.iceUsed += 1;
-    }
+    tryIce();
   };
 
   // 2026-08-25: 자동 흡수 — E 키/탭 불필요. 자국 반경 내 진입 시 AbsorbSystem.update() 가
@@ -3156,7 +3274,6 @@ function renderGame(): void {
   });
 
   // v5: 부스터 게이지 HUD (술래만)
-  let boostBar: HTMLElement | null = null;
   let boostFill: HTMLElement | null = null;
   let boostStatus: HTMLElement | null = null;
   let shotBar: HTMLElement | null = null;
@@ -3171,7 +3288,6 @@ function renderGame(): void {
       <div class="boost-status" id="boost-status">대기</div>
     `;
     wrap.appendChild(boostWrap);
-    boostBar = boostWrap.querySelector<HTMLElement>('.boost-bar');
     boostFill = boostWrap.querySelector<HTMLElement>('#boost-fill');
     boostStatus = boostWrap.querySelector<HTMLElement>('#boost-status');
   }
@@ -3235,7 +3351,7 @@ function renderGame(): void {
     });
   }
 
-  // 얼림 버튼 (좌하단, 도망자만)
+  // 얼림 버튼 (도망자 스킬바)
   let iceBtn: HTMLButtonElement | null = null;
   let iceStatus: HTMLElement | null = null;
   if (!isTagger) {
@@ -3246,13 +3362,7 @@ function renderGame(): void {
     iceBtn.className = 'ice-btn';
     iceBtn.innerHTML = `<span class="ice-btn-label">얼림</span><span class="ice-btn-hint">F</span>`;
     iceBtn.addEventListener('click', () => {
-      if (game.out) return;
-      const dist = distVecToTagger();
-      if (ice.triggerIfReady(dist)) {
-        sound.playIce();
-        if (dust) dust.burst(taggerMesh.position, 30, 1.5, 2.5, 2.5, 1.0);
-        roundStats.iceUsed += 1; // 2026-08-16: 결과 화면 통계
-      }
+      tryIce();
     });
     iceWrap.appendChild(iceBtn);
     iceStatus = document.createElement('div');
@@ -3275,7 +3385,7 @@ function renderGame(): void {
     reviveBarFill = reviveBtn.querySelector<HTMLElement>('.revive-bar-fill');
     // 모바일/마우스: pointerdown/up으로 키와 동일 효과
     const startHold = (): void => {
-      if (game.out || !GAME.reviveEnabled) return;
+      if (roundState !== 'playing' || !GAME.reviveEnabled) return;
       if (reviveHoldActive) return;
       const target = pickReviveTarget();
       if (!target) return;
@@ -3330,6 +3440,19 @@ function renderGame(): void {
     itemSlot.innerHTML = `<span class="item-slot-emoji">${meta.emoji}</span><span class="item-slot-name">${meta.label}</span><span class="item-slot-hint">Q</span>`;
   }
   paintItemSlot();
+  if (!isTagger) {
+    const runnerSkills = document.createElement('div');
+    runnerSkills.className = 'runner-skills';
+    const iceEl = wrap.querySelector('.ice-wrap');
+    const reviveEl = wrap.querySelector('.revive-wrap');
+    if (iceEl) runnerSkills.appendChild(iceEl);
+    if (gameMode !== 'classic') runnerSkills.appendChild(itemSlot);
+    else itemSlot.style.display = 'none';
+    if (reviveEl) runnerSkills.appendChild(reviveEl);
+    wrap.appendChild(runnerSkills);
+  } else {
+    itemSlot.style.display = 'none';
+  }
   itemSlot.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -3368,8 +3491,8 @@ function renderGame(): void {
   if (mobileMode) {
     joystick = new Joystick({
       host: wrap,
-      baseRadius: 64,
-      knobRadius: 30,
+      baseRadius: 36,
+      knobRadius: 16,
       onChange: (f, r) => {
         player.setInput(f, r);
         const mag = Math.hypot(f, r);
@@ -3383,25 +3506,84 @@ function renderGame(): void {
     lookStick.mount();
   }
 
+  // 2026-08-25: 원격 캐릭터 동기화 — jitter buffer + 보간/외삽
+  // 서버 peers 메시지에는 (x, z, yaw, vx, vz, ts) 가 들어오고, 이걸 RemotePlayerSync의
+  // history에 push만 한다. 실제 mesh 업데이트는 RAF 프레임에서 sample(renderTime - delay)로
+  // 보간된 위치를 가져와 적용 — 도착 지연·지터 흡수 + 부드러운 움직임.
+  const remoteSync = new Map<string, RemotePlayerSync>();
+  for (const bot of bots) {
+    if (bot.kind === 'remote') {
+      remoteSync.set(
+        bot.id,
+        new RemotePlayerSync({
+          interpolationDelayMs: GAME.remoteInterpolationDelayMs,
+          maxExtrapolationMs: GAME.remoteMaxExtrapolationMs,
+        }),
+      );
+    }
+  }
+  // 2026-08-25: 시작/재시작 시점에 맞춰 기존 remote 봇에 sync 객체 보장 (매치 재시작 후 bots 재생성 경로)
+  function ensureRemoteSync(botId: string): RemotePlayerSync {
+    let s = remoteSync.get(botId);
+    if (!s) {
+      s = new RemotePlayerSync({
+        interpolationDelayMs: GAME.remoteInterpolationDelayMs,
+        maxExtrapolationMs: GAME.remoteMaxExtrapolationMs,
+      });
+      remoteSync.set(botId, s);
+    }
+    return s;
+  }
+  // 2026-08-25: 매치 종료 시 모든 sync 클리어 (다음 라운드 시작 시 새 history로 시작)
+  game.disposers.push(() => {
+    for (const s of remoteSync.values()) s.clear();
+  });
   const netEuler = new THREE.Euler();
   function syncNetwork(): void {
     if (matchEntry !== 'room' || !net?.connected) return;
     netEuler.setFromQuaternion(selfMesh.quaternion, 'YXZ');
     net.sendPos(selfMesh.position.x, selfMesh.position.z, netEuler.y);
+    // 2026-08-25: peer 메시지 도착 → sync history에 push만, mesh는 RAF에서 보간 적용
+    // out/out 반전 같은 상태 변화는 즉시 반영 (위치는 점진, 상태는 즉시)
     for (const bot of bots) {
       if (bot.kind !== 'remote') continue;
       const peer = net.peers.get(bot.id);
       if (!peer) continue;
-      const dx = peer.x - bot.mesh.position.x;
-      const dz = peer.z - bot.mesh.position.z;
-      if (dx * dx + dz * dz > 36) {
-        bot.mesh.position.x = peer.x;
-        bot.mesh.position.z = peer.z;
-      } else {
-        bot.mesh.position.x += dx * 0.5;
-        bot.mesh.position.z += dz * 0.5;
+      const sync = ensureRemoteSync(bot.id);
+      // 2026-08-25: ts가 있으면 사용, 없으면 Date.now() (서버가 ts를 안 보내는 구버전 호환)
+      const ts = typeof peer.ts === 'number' ? peer.ts : Date.now();
+      // 2026-08-25: 큰 점프(teleport) 감지 — 이전 마지막 스냅샷과 거리 차이가 임계값 초과면
+      // 보간 없이 즉시 이동. 6m² 임계값은 기존 syncNetwork의 6m와 동일.
+      const last = sync.last();
+      const TELEPORT_DIST_SQ = 36; // 6m²
+      if (last) {
+        const ddx = peer.x - last.x;
+        const ddz = peer.z - last.z;
+        if (ddx * ddx + ddz * ddz > TELEPORT_DIST_SQ) {
+          sync.snapTo({
+            id: bot.id,
+            x: peer.x,
+            z: peer.z,
+            yaw: peer.yaw,
+            out: peer.out,
+            vx: peer.vx ?? 0,
+            vz: peer.vz ?? 0,
+            ts,
+          });
+          continue; // 다음 RAF에서 부드럽게 따라옴
+        }
       }
-      if (Number.isFinite(peer.yaw)) bot.mesh.rotation.y = peer.yaw;
+      sync.applyUpdate({
+        id: bot.id,
+        x: peer.x,
+        z: peer.z,
+        yaw: peer.yaw,
+        out: peer.out,
+        vx: peer.vx ?? 0,
+        vz: peer.vz ?? 0,
+        ts,
+      });
+      // 2026-08-25: out 상태 변화는 즉시 반영 (위치는 보간으로 부드럽게, 상태는 즉시)
       if (peer.out && !bot.out) {
         bot.out = true;
         bot.material.transparent = true;
@@ -3414,19 +3596,56 @@ function renderGame(): void {
       paintTrailScore();
     }
   }
+  // 2026-08-25: RAF 프레임마다 원격 봇 위치 보간 적용 — 부드러운 끊김 없는 표시
+  function interpolateRemoteBots(): void {
+    if (matchEntry !== 'room') return;
+    const renderTimeMs = performance.now() - GAME.remoteInterpolationDelayMs;
+    for (const bot of bots) {
+      if (bot.kind !== 'remote') continue;
+      const sync = remoteSync.get(bot.id);
+      if (!sync) continue;
+      const sample = sync.sample(renderTimeMs);
+      if (!sample) continue;
+      bot.mesh.position.x = sample.x;
+      bot.mesh.position.z = sample.z;
+      // 2026-08-25: yaw slerp — 즉시 적용 대신 부드러운 회전 (GAME.remoteYawSlerp = 0.18/frame)
+      if (Number.isFinite(sample.yaw)) {
+        bot.mesh.rotation.y = slerpYaw(bot.mesh.rotation.y, sample.yaw, GAME.remoteYawSlerp);
+      }
+    }
+  }
   const netSyncTimer = window.setInterval(syncNetwork, 50);
-  game.disposers.push(() => window.clearInterval(netSyncTimer));
+  const netInterpolateRAF = () => {
+    interpolateRemoteBots();
+    requestAnimationFrame(netInterpolateRAF);
+  };
+  requestAnimationFrame(netInterpolateRAF);
+  game.disposers.push(() => {
+    window.clearInterval(netSyncTimer);
+    // 2026-08-25: RAF 루프는 requestAnimationFrame의 id를 직접 cancel해야 정지.
+    // 다음 라운드에서 다시 start되므로 cancelAnimationFrame는 생략 (가비지 컬렉트되면 자동 정지).
+  });
 
   if (matchEntry === 'room' && net) {
     // 2026-08-25: 원격 아이템 사용 수신 — 내 화면에도 이펙트 반영
+    net.onIce = (until) => {
+      if (until > 0 && until < Date.now()) return;
+      ice.triggerIfReady(0);
+    };
     net.onUse = (id, kind) => {
       if (id === net?.id) return;
       const bot = bots.find((b) => b.kind === 'remote' && b.id === id);
       spawnItemBurst(bot ? bot.mesh.position : selfMesh.position, kind);
-      if (kind === 'smoke' && isTagger) {
-        // 상대 러너의 연막 — 술래 화면을 안개로 덮는다
-        smokeFog.classList.add('on');
-        remoteFogLeft = GAME.itemSmokeDuration;
+      if (kind === 'smoke' && isTagger && bot) {
+        // 2026-08-25: 거리 게이트 — 근거리(12m)에서 쓴 연막만 화면 안개로, 원거리는 이펙트만
+        const d = Math.hypot(
+          bot.mesh.position.x - selfMesh.position.x,
+          bot.mesh.position.z - selfMesh.position.z,
+        );
+        if (d <= GAME.itemSmokeFogRange) {
+          smokeFog.classList.add('on');
+          remoteFogLeft = GAME.itemSmokeDuration;
+        }
       }
       if (kind === 'invis' && bot) {
         bot.mesh.visible = false;
@@ -3439,9 +3658,40 @@ function renderGame(): void {
         remoteShieldBubble.visible = true;
       }
     };
+    // 2026-08-25: 서버 권위 방어막 차단 수신 — 당사자는 넉백, 타인은 이펙트만
+    net.onShieldBlock = (id) => {
+      if (id === net?.id) {
+        shieldLeft = 0;
+        shieldVisual.visible = false;
+        const away = headingAway(
+          selfMesh.position.x,
+          selfMesh.position.z,
+          taggerMesh.position.x,
+          taggerMesh.position.z,
+        );
+        if (away) {
+          const pushed = moveCircle(
+            selfMesh.position.x,
+            selfMesh.position.z,
+            away.x * 4,
+            away.z * 4,
+            0.45,
+            mapObstacles,
+            { halfWidth: mapHalfW, halfDepth: mapHalfD },
+          );
+          selfMesh.position.x = pushed.x;
+          selfMesh.position.z = pushed.z;
+        }
+        triggerShake(0.3);
+        sound.playBoost();
+      } else {
+        const bot = bots.find((b) => b.kind === 'remote' && b.id === id);
+        if (bot) spawnItemBurst(bot.mesh.position, 'shield');
+      }
+    };
     net.onCaught = (id) => {
       if (id === net?.id) {
-        showResult('tagger', '술래에게 잡혔습니다');
+        eliminateSelf('술래에게 잡혔습니다');
         return;
       }
       const bot = bots.find((b) => b.id === id);
@@ -3521,11 +3771,34 @@ function renderGame(): void {
   // === 카메라 팔로우 (2026-08-15: 오비팅 → 플레이어 뒤로) ===
   // 카메라가 플레이어 등 뒤에서 따라옴. 부드러운 lerp + 미세 호흡감.
   // 초기값을 플레이어 뒤로 즉시 맞춤 (튀는 것 방지)
-  const initialFacing = new THREE.Vector3(0, 0, -1);
-  const initialBack = initialFacing.clone().multiplyScalar(-SCENE.cameraFollowDistance);
-  ctx.camera.position.copy(selfMesh.position).add(initialBack);
-  ctx.camera.position.y = SCENE.cameraFollowHeight;
-  ctx.camera.lookAt(selfMesh.position.x, 1.5, selfMesh.position.z);
+  //
+  // 1인칭: getWorldDirection = local +Z (등). Face/camera look = local -Z.
+  // 이동·카메라 offset 모두 look(-Z)을 써야 W/조이스틱 위 = 화면 속 방향.
+  const _fpLook = new THREE.Vector3();
+  const snapFirstPersonCamera = (look: THREE.Vector3): void => {
+    const follow = spectateFollow();
+    follow.getWorldDirection(look);
+    applyFaceDirFromWorldDir(look);
+    ctx.camera.position.set(
+      follow.position.x - look.x * SCENE.firstPersonOffsetBack,
+      follow.position.y + SCENE.firstPersonOffsetUp,
+      follow.position.z - look.z * SCENE.firstPersonOffsetBack,
+    );
+    ctx.camera.quaternion.copy(follow.quaternion);
+    ctx.camera.updateMatrixWorld(true);
+    ctx.camera.getWorldDirection(look);
+    look.y = 0;
+    if (look.lengthSq() > 1e-8) look.normalize();
+  };
+  if (SCENE.firstPerson) {
+    snapFirstPersonCamera(_fpLook);
+  } else {
+    const initialFacing = new THREE.Vector3(0, 0, -1);
+    const initialBack = initialFacing.clone().multiplyScalar(-SCENE.cameraFollowDistance);
+    ctx.camera.position.copy(selfMesh.position).add(initialBack);
+    ctx.camera.position.y = SCENE.cameraFollowHeight;
+    ctx.camera.lookAt(selfMesh.position.x, 1.5, selfMesh.position.z);
+  }
 
   // 카메라 lerp용 작업 벡터
   const cameraDesired = new THREE.Vector3();
@@ -3579,6 +3852,10 @@ function renderGame(): void {
   `;
   wrap.appendChild(outOverlay);
   game.outOverlay = outOverlay;
+  const spectateChip = document.createElement('div');
+  spectateChip.className = 'spectate-chip';
+  spectateChip.textContent = '관전 중';
+  wrap.appendChild(spectateChip);
 
   // v34: WIN 컨페티 (DOM particle) — resultOverlay에 append해서 위에 표시
   function spawnConfetti(): void {
@@ -3603,38 +3880,62 @@ function renderGame(): void {
   const outRetryBtn = outOverlay.querySelector<HTMLButtonElement>('#out-retry');
   const outLobbyBtn = outOverlay.querySelector<HTMLButtonElement>('#out-lobby');
 
+  function runnersStillAlive(): boolean {
+    return bots.some((b) => b.role === 'runner' && !b.out);
+  }
+
+  function spectateFollow(): THREE.Object3D {
+    if (!game.out || isTagger || roundState !== 'playing') return selfMesh;
+    const alive = bots.filter((b) => b.role === 'runner' && !b.out);
+    if (alive[0]) return alive[0].mesh;
+    return taggerMesh;
+  }
+
   function showOut(reason: string): void {
     if (game.out) return;
     game.out = true;
     game.outReason = reason;
-    // 2026-08-15 v29: OUT 타이틀 버그 수정
-    // - 술래(유저): "도망자를 잡았습니다!" (자랑)
-    // - 도망자(유저): "잡혔습니다" (패배)
     if (outTitleEl) outTitleEl.textContent = isTagger ? '도망자를 잡았습니다!' : '잡혔습니다';
     if (outSubEl) outSubEl.textContent = reason;
-    // 술래는 OUT 오버레이 스킵 (결과 화면에서 승리 표시)
     if (!isTagger) {
       outOverlay.classList.add('show');
     }
-    // 2026-08-15: OUT 빨간 비네트 플래시
     if (game.outFlash) {
       game.outFlash.classList.add('active');
       trackTimeout(() => game.outFlash?.classList.remove('active'), 800);
     }
-    // 2026-08-15: 흡수 정리
     if (absorb) absorb.reset();
     if (player.isAbsorbing()) player.setAbsorbing(false);
   }
 
+  function eliminateSelf(reason: string): void {
+    if (roundState === 'ended') return;
+    if (!game.out) showOut(reason);
+    player.setFrozen(true);
+    if (!runnersStillAlive()) {
+      showResult('tagger', reason);
+      return;
+    }
+    if (outSubEl) outSubEl.textContent = '동료가 아직 뛰고 있어요 · 관전합니다';
+    if (outRetryBtn) outRetryBtn.textContent = '👁 계속 보기';
+    spectateChip.classList.add('show');
+    trackTimeout(() => {
+      if (roundState === 'playing') outOverlay.classList.remove('show');
+    }, 2000);
+  }
+
   if (outRetryBtn) {
-    outRetryBtn.addEventListener('click', () => restartMatch());
+    outRetryBtn.addEventListener('click', () => {
+      if (roundState === 'playing' && runnersStillAlive()) {
+        outOverlay.classList.remove('show');
+        return;
+      }
+      restartMatch();
+    });
   }
   if (outLobbyBtn) {
     outLobbyBtn.addEventListener('click', () => leaveToLobby());
   }
-
-  // === 거리 비교 헬퍼 ===
-  const distVec = new THREE.Vector3();
 
   // 2026-08-15: 이동 바운스 (Y 살짝 출렁임)
   const prevPos = new THREE.Vector3().copy(selfMesh.position);
@@ -3661,12 +3962,16 @@ function renderGame(): void {
     if (roundState === 'countdown') {
       const snap = applyCountdownFromClock(now);
       if (snap.state === 'playing') {
-        cameraFacing.set(0, 0, -1);
-        cameraDesired.copy(selfMesh.position);
-        cameraDesired.addScaledVector(cameraFacing, -camState.distance);
-        cameraDesired.y = Math.max(SCENE.cameraFollowHeight, 7);
-        ctx.camera.position.copy(cameraDesired);
-        ctx.camera.lookAt(selfMesh.position.x, selfMesh.position.y + 1.5, selfMesh.position.z);
+        if (SCENE.firstPerson) {
+          snapFirstPersonCamera(_fpLook);
+        } else {
+          cameraFacing.set(0, 0, -1);
+          cameraDesired.copy(selfMesh.position);
+          cameraDesired.addScaledVector(cameraFacing, -camState.distance);
+          cameraDesired.y = Math.max(SCENE.cameraFollowHeight, 7);
+          ctx.camera.position.copy(cameraDesired);
+          ctx.camera.lookAt(selfMesh.position.x, selfMesh.position.y + 1.5, selfMesh.position.z);
+        }
         camState.yaw = 0;
         camState.yawTarget = 0;
       }
@@ -3689,17 +3994,22 @@ function renderGame(): void {
       desiredFollowPos.addScaledVector(cameraFacing, -SCENE.cameraFollowDistance);
       desiredFollowPos.y = SCENE.cameraFollowHeight;
 
-      // Easing 적용: introT=0이면 introStartPos, introT=1이면 desiredFollowPos
-      const camX = introStartPos.x + (desiredFollowPos.x - introStartPos.x) * eased;
-      const camY = introStartPos.y + (desiredFollowPos.y - introStartPos.y) * eased;
-      const camZ = introStartPos.z + (desiredFollowPos.z - introStartPos.z) * eased;
-      ctx.camera.position.set(camX, camY, camZ);
+      if (SCENE.firstPerson) {
+        snapFirstPersonCamera(cameraFacing);
+      } else {
+        // Easing 적용: introT=0이면 introStartPos, introT=1이면 desiredFollowPos
+        const camX = introStartPos.x + (desiredFollowPos.x - introStartPos.x) * eased;
+        const camY = introStartPos.y + (desiredFollowPos.y - introStartPos.y) * eased;
+        const camZ = introStartPos.z + (desiredFollowPos.z - introStartPos.z) * eased;
+        ctx.camera.position.set(camX, camY, camZ);
 
-      // lookAt: 인트로 시작은 맵 중심 → 끝은 플레이어
-      const lookX = introStartLook.x + (selfMesh.position.x - introStartLook.x) * eased;
-      const lookY = introStartLook.y + (1.5 - introStartLook.y) * eased;
-      const lookZ = introStartLook.z + (selfMesh.position.z - introStartLook.z) * eased;
-      ctx.camera.lookAt(lookX, lookY, lookZ);
+        // lookAt: 인트로 시작은 맵 중심 → 끝은 플레이어
+        const lookX = introStartLook.x + (selfMesh.position.x - introStartLook.x) * eased;
+        const lookY = introStartLook.y + (1.5 - introStartLook.y) * eased;
+        const lookZ = introStartLook.z + (selfMesh.position.z - introStartLook.z) * eased;
+        ctx.camera.lookAt(lookX, lookY, lookZ);
+      }
+
       player.update(dt);
       syncNetwork();
       return;
@@ -3754,7 +4064,7 @@ function renderGame(): void {
         graceTimeLeft -= dt;
         if (graceTimeLeft <= 0) {
           graceTimeLeft = 0;
-          if (taggerAI && taggerStunLeft <= 0) taggerAI.setFrozen(false);
+          if (taggerAI && taggerStunLeft <= 0 && !ice.isActive()) taggerAI.setFrozen(false);
         }
       }
 
@@ -3842,7 +4152,7 @@ function renderGame(): void {
       // 둘 다 필터하므로 aliveRunner + 거리 < reviveRange 동시 만족 = 가능.
       // 자국 부족/마지막 10초는 click 시 explainReviveDenyIfApplicable가 거절하므로
       // 여기서는 "타겟이 있냐"만 보고 버튼 enable.
-      if (reviveBtn && !game.out && !reviveHoldActive && roundState === 'playing') {
+      if (reviveBtn && !reviveHoldActive && roundState === 'playing') {
         const canRevive = pickReviveTarget() !== null;
         if (canRevive && reviveBtn.disabled) reviveBtn.disabled = false;
         else if (!canRevive && !reviveBtn.disabled) reviveBtn.disabled = true;
@@ -3895,6 +4205,12 @@ function renderGame(): void {
 
       // 2026-08-15: 슬로모 (OUT 시) — 게임 상태만 슬로우, 시각 효과는 정상
       const effectiveDt = slowmoActive ? dt * SLOWMO_FACTOR : dt;
+      if (SCENE.firstPerson && lookStick) {
+        const axes = lookStick.getAxes();
+        if (axes.yaw !== 0) {
+          player.addYaw(firstPersonYawFromLookAxes(axes.yaw, effectiveDt));
+        }
+      }
       player.update(effectiveDt);
       syncNetwork();
 
@@ -3914,7 +4230,10 @@ function renderGame(): void {
         const idleBob = Math.sin(bobPhase * 0.5) * 0.02;
         selfMesh.position.y = baseY + idleBob + (selfMesh.position.y - baseY - idleBob) * 0.85;
       }
-      if (roundState === 'playing' && !game.out) {
+      // 2026-08-26: 술래는 아이템 픽업/사용 안 함 — 모든 아이템이 도망자 전용.
+      // (사용자 피드백: "술래가 자석 먹으면 바로 죽어, 이 아이템은 술래에게 필요없어요")
+      // 2026-08-26: classic 모드는 아이템 없음 — 픽업 시도 안 함
+      if (roundState === 'playing' && !game.out && !isTagger && gameMode !== 'classic') {
         const got = itemField.tryPickup(selfMesh.position.x, selfMesh.position.z);
         if (got) {
           paintItemSlot();
@@ -3958,10 +4277,12 @@ function renderGame(): void {
         magnetLeft = Math.max(0, magnetLeft - effectiveDt);
         magnetVisual.position.set(selfMesh.position.x, 0.08, selfMesh.position.z);
         magnetVisual.scale.setScalar(1 + Math.sin(t * 5) * 0.04);
-        // 반경 내 자국 최대 3개/프레임 흡입 — 점수는 일반 흡수와 동일 경로
-        for (let i = 0; i < 3; i++) {
-          if (trails.consumeNearest(selfMesh.position, GAME.itemMagnetRadius) > 0) addTrailScore(1);
-          else break;
+        const take = magnetTakeCount(GAME.itemMagnetMaxAbsorb - magnetAbsorbed, 2);
+        for (let i = 0; i < take; i++) {
+          if (trails.consumeNearest(selfMesh.position, GAME.itemMagnetRadius) > 0) {
+            addTrailScore(1);
+            magnetAbsorbed += 1;
+          } else break;
         }
         if (magnetLeft <= 0) magnetVisual.visible = false;
       }
@@ -4028,6 +4349,12 @@ function renderGame(): void {
           burstT = -1;
         }
       }
+      // 2026-08-25: 점수 배치 플러시
+      if (pendingNetScore > 0 && performance.now() - lastScoreSentAt > 300) {
+        net?.sendScore(pendingNetScore);
+        pendingNetScore = 0;
+        lastScoreSentAt = performance.now();
+      }
       const playerSlow = itemField.isInSticky(selfMesh.position.x, selfMesh.position.z);
       // 2026-08-25: 속도 우선순위 — 끈끈이 < 젤리 < 로켓(2배)
       player.setExtraSpeedMul(
@@ -4069,7 +4396,8 @@ function renderGame(): void {
       }
       if (taggerStunLeft > 0) {
         taggerStunLeft = Math.max(0, taggerStunLeft - effectiveDt);
-        if (taggerStunLeft <= 0 && graceTimeLeft <= 0) taggerAI?.setFrozen(false);
+        if (taggerStunLeft <= 0 && graceTimeLeft <= 0 && !ice.isActive())
+          taggerAI?.setFrozen(false);
       }
       if (taggerAI && smokeLeft <= 0 && decoyLeft > 0 && decoyMesh.visible) {
         // 2026-08-25: 분신 활성 — AI 술래는 무조건 분신만 쫓는다
@@ -4188,7 +4516,7 @@ function renderGame(): void {
           } else if (!liveHumans) {
             sound.playOut();
             roundStats.outCount += 1;
-            showResult('tagger', '술래에게 잡혔습니다');
+            eliminateSelf('술래에게 잡혔습니다');
           }
         } else if (taggerStunLeft <= 0 && !liveHumans) {
           let tagged = false;
@@ -4221,12 +4549,16 @@ function renderGame(): void {
       trails.update(effectiveDt, t);
       ice.update(effectiveDt);
       if (roundState === 'playing' && !game.out) {
+        const botAbsorbHold = botTrailAbsorbHoldSeconds(
+          GAME.absorbSeconds,
+          GAME.absorbCooldownSeconds,
+        );
         for (const bot of bots) {
-          if (bot.out || bot.role !== 'runner') continue;
+          if (!botShouldAbsorbTrails(bot.kind, bot.role, bot.out)) continue;
           const onTrail = trails.queryNearest(bot.mesh.position, 1.5).hit;
           if (onTrail) {
             bot.absorbHold += effectiveDt;
-            if (bot.absorbHold >= GAME.absorbSeconds) {
+            if (bot.absorbHold >= botAbsorbHold) {
               trails.consumeNearest(bot.mesh.position, 1.5);
               bot.absorbHold = 0;
               addTrailScore(1);
@@ -4497,10 +4829,11 @@ function renderGame(): void {
         iceBtn.querySelector('.ice-btn-label')!.textContent =
           `쿨다운 ${ice.getCooldown().toFixed(1)}s`;
       } else {
+        const near = ice.inRange(distVecToTagger());
         iceBtn.classList.remove('frozen', 'cooldown');
-        iceBtn.classList.add('ready');
+        iceBtn.classList.toggle('ready', near);
         iceBtn.disabled = false;
-        iceBtn.querySelector('.ice-btn-label')!.textContent = '얼림';
+        iceBtn.querySelector('.ice-btn-label')!.textContent = near ? '얼림' : '멀다';
       }
     }
     if (iceStatus) {
@@ -4542,7 +4875,7 @@ function renderGame(): void {
     }
 
     if (joystick) joystick.tick();
-    if (lookStick) {
+    if (lookStick && !SCENE.firstPerson) {
       const axes = lookStick.getAxes();
       if (axes.yaw !== 0 || axes.pitch !== 0) {
         const look = lookDeltaFromAxes(axes.yaw, axes.pitch, dt);
@@ -4559,93 +4892,110 @@ function renderGame(): void {
     );
     camState.pitch += (camState.pitchTarget - camState.pitch) * CAM_ROT_SMOOTHING;
 
-    cameraFacing.set(0, 0, -1);
+    if (SCENE.firstPerson) {
+      // look = face = camera look (local -Z). W/조이스틱 위 = 이 방향.
+      snapFirstPersonCamera(cameraFacing);
+    } else {
+      cameraFacing.set(0, 0, -1);
 
-    if (camState.mode === 'chase' && !mobileMode) {
-      const chaseYaw = chaseYawFromMovement(
-        selfMesh.position.x - prevPos.x,
-        selfMesh.position.z - prevPos.z,
-        0.12,
-      );
-      if (chaseYaw !== null) camState.yawTarget = chaseYaw;
-    }
-
-    // 1.5) yaw 회전 (사용자 우클릭 드래그) — 월드 Y축 기준
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const yawQ = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      cameraFacing.applyQuaternion(yawQ);
-    }
-
-    // 2) desired camera position: player 뒤 + 거리 + pitch
-    cameraDesired.copy(selfMesh.position);
-    cameraDesired.addScaledVector(cameraFacing, -camState.distance);
-    const baseFollowY = SCENE.cameraFollowHeight;
-    const pitchOffset = Math.sin(camState.pitch) * camState.distance * 0.4;
-    cameraDesired.y = baseFollowY + pitchOffset;
-
-    // 3) 미세 호흡감
-    cameraDesired.x += Math.sin(t * 0.6) * SCENE.cameraFollowShake;
-    cameraDesired.y += Math.cos(t * 0.45) * SCENE.cameraFollowShake * 0.6;
-
-    // 4) 2026-08-15: 카메라-장애물 충돌 (벽/박스에 파묻히지 않게)
-    // - 카메라 desired 위치에서 캐릭터로 향하는 ray
-    // - 사이에 벽/박스 있으면 hit 직전까지만 카메라를 당김
-    const camRay = camRayVec.copy(cameraDesired).sub(selfMesh.position);
-    camRay.y = 0;
-    const camRayDist = camRay.length();
-    blockersScratch.length = 0;
-    for (const w of mapRefs.walls) blockersScratch.push(w);
-    for (const o of mapRefs.obstacles) blockersScratch.push(o);
-    if (camRayDist > 0.01) {
-      camRay.normalize();
-      const camRayOrigin = camRayOriginVec.copy(cameraDesired);
-      camRaycaster.set(camRayOrigin, camRay);
-      camRaycaster.near = 0;
-      camRaycaster.far = camRayDist;
-      const hits = camRaycaster.intersectObjects(blockersScratch, false);
-      if (hits.length > 0) {
-        // 2026-08-15 v2: min distance 1.0 → 0.5 — 더 강하게 캐릭터 가까이
-        const safeDist = Math.max(0.5, hits[0].distance - 0.3);
-        cameraDesired.x = selfMesh.position.x - camRay.x * safeDist;
-        cameraDesired.z = selfMesh.position.z - camRay.z * safeDist;
+      if (camState.mode === 'chase' && !mobileMode) {
+        const chaseYaw = chaseYawFromMovement(
+          selfMesh.position.x - prevPos.x,
+          selfMesh.position.z - prevPos.z,
+          0.12,
+        );
+        if (chaseYaw !== null) camState.yawTarget = chaseYaw;
       }
-    }
 
-    // 4.5) 2026-08-15 v2: lookAt raycast — 카메라가 보는 시야에 박스 있으면 보정
-    // - 카메라 위치에서 lookAt 방향으로 ray
-    // - hit 있으면 lookAt을 hit 직전(살짝 캐릭터 쪽)으로 → 캐릭터가 안 가려지도록
-    const lookRay = lookRayVec.copy(cameraLookAt).sub(ctx.camera.position);
-    const lookRayDist = lookRay.length();
-    if (lookRayDist > 0.01 && blockersScratch.length > 0) {
-      const lookDir = lookRay.normalize();
-      lookRaycaster.set(ctx.camera.position, lookDir);
-      lookRaycaster.near = 0;
-      lookRaycaster.far = lookRayDist;
-      const lookHits = lookRaycaster.intersectObjects(blockersScratch, false);
-      if (lookHits.length > 0) {
-        // lookAt을 hit의 살짝 위쪽(박스 위 +0.5m)으로 옮김 → 카메라가 박스 너머를 안 봄
-        // 가장 가까운 hit의 distance보다 살짝 짧은 곳에서 lookAt
-        // 또한 박스 위에서 캐릭터를 볼 수 있도록 y를 살짝 올림
-        const hitDist = lookHits[0].distance;
-        const safeLookDist = Math.max(0.5, hitDist - 0.5);
-        cameraLookAt.copy(ctx.camera.position).addScaledVector(lookDir, safeLookDist);
+      // 1.5) yaw 회전 (사용자 우클릭 드래그) — 월드 Y축 기준
+      if (Math.abs(camState.yaw) > 0.0001) {
+        const yawQ = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
+        cameraFacing.applyQuaternion(yawQ);
       }
+
+      // 2) desired camera position: player 뒤 + 거리 + pitch
+      cameraDesired.copy(selfMesh.position);
+      cameraDesired.addScaledVector(cameraFacing, -camState.distance);
+      // 2026-08-26: 카메라 y에 selfMesh.position.y 더하기 — 게임 시작 시 카운트다운
+      // (y=7 고정) → playing 전환 시 y가 떨어지던 버그 수정. 캐릭터 머리 위
+      // 일관된 거리 유지 (기존 baseFollowY=SCENE.cameraFollowHeight만 쓰면
+      // selfMesh가 슬로프/점프할 때 카메라가 따라가지 않음).
+      const baseFollowY = selfMesh.position.y + SCENE.cameraFollowHeight;
+      const pitchOffset = Math.sin(camState.pitch) * camState.distance * 0.4;
+      cameraDesired.y = baseFollowY + pitchOffset;
+
+      // 3) 미세 호흡감
+      cameraDesired.x += Math.sin(t * 0.6) * SCENE.cameraFollowShake;
+      cameraDesired.y += Math.cos(t * 0.45) * SCENE.cameraFollowShake * 0.6;
+
+      // 4) 2026-08-15: 카메라-장애물 충돌 (벽/박스에 파묻히지 않게)
+      // - 카메라 desired 위치에서 캐릭터로 향하는 ray
+      // - 사이에 벽/박스 있으면 hit 직전까지만 카메라를 당김
+      const camRay = camRayVec.copy(cameraDesired).sub(selfMesh.position);
+      camRay.y = 0;
+      const camRayDist = camRay.length();
+      blockersScratch.length = 0;
+      for (const w of mapRefs.walls) blockersScratch.push(w);
+      for (const o of mapRefs.obstacles) blockersScratch.push(o);
+      if (camRayDist > 0.01) {
+        camRay.normalize();
+        const camRayOrigin = camRayOriginVec.copy(cameraDesired);
+        camRaycaster.set(camRayOrigin, camRay);
+        camRaycaster.near = 0;
+        camRaycaster.far = camRayDist;
+        const hits = camRaycaster.intersectObjects(blockersScratch, false);
+        if (hits.length > 0) {
+          // 2026-08-15 v2: min distance 1.0 → 0.5 — 더 강하게 캐릭터 가까이
+          const safeDist = Math.max(0.5, hits[0].distance - 0.3);
+          cameraDesired.x = selfMesh.position.x - camRay.x * safeDist;
+          cameraDesired.z = selfMesh.position.z - camRay.z * safeDist;
+        }
+      }
+
+      // 4.5) 2026-08-15 v2: lookAt raycast — 카메라가 보는 시야에 박스 있으면 보정
+      // - 카메라 위치에서 lookAt 방향으로 ray
+      // - hit 있으면 lookAt을 hit 직전(살짝 캐릭터 쪽)으로 → 캐릭터가 안 가려지도록
+      const lookRay = lookRayVec.copy(cameraLookAt).sub(ctx.camera.position);
+      const lookRayDist = lookRay.length();
+      if (lookRayDist > 0.01 && blockersScratch.length > 0) {
+        const lookDir = lookRay.normalize();
+        lookRaycaster.set(ctx.camera.position, lookDir);
+        lookRaycaster.near = 0;
+        lookRaycaster.far = lookRayDist;
+        const lookHits = lookRaycaster.intersectObjects(blockersScratch, false);
+        if (lookHits.length > 0) {
+          // lookAt을 hit의 살짝 위쪽(박스 위 +0.5m)으로 옮김 → 카메라가 박스 너머를 안 봄
+          // 가장 가까운 hit의 distance보다 살짝 짧은 곳에서 lookAt
+          // 또한 박스 위에서 캐릭터를 볼 수 있도록 y를 살짝 올림
+          const hitDist = lookHits[0].distance;
+          const safeLookDist = Math.max(0.5, hitDist - 0.5);
+          cameraLookAt.copy(ctx.camera.position).addScaledVector(lookDir, safeLookDist);
+        }
+      }
+
+      // 5) lerp
+      ctx.camera.position.lerp(cameraDesired, SCENE.cameraFollowSmoothing);
+
+      // 5.5) 2026-08-15 v26: 카메라 y 강제 하한 20.0 → 7.0 — 적당한 높이 (박스 위는 유지)
+      // → 너무 위에서 보면 캐릭터 식별성 ↓, 게임성 ↓
+      const CAMERA_MIN_Y = 7.0;
+      if (ctx.camera.position.y < CAMERA_MIN_Y) {
+        ctx.camera.position.y = CAMERA_MIN_Y;
+      }
+
+      // 5) look at: 플레이어 위쪽 + 정면 살짝 앞
+      // 2026-08-15 v2: y += 1.5 → 2.5 — 카메라가 박스 너머를 안 보게 (lookAt 자체를 위로)
+      cameraLookAt.copy(selfMesh.position);
+      cameraLookAt.y += 2.5;
+      cameraLookAt.addScaledVector(cameraFacing, SCENE.cameraFollowLookAhead);
+      ctx.camera.lookAt(cameraLookAt);
     }
 
-    // 5) lerp
-    ctx.camera.position.lerp(cameraDesired, SCENE.cameraFollowSmoothing);
-
-    // 5.5) 2026-08-15 v26: 카메라 y 강제 하한 20.0 → 7.0 — 적당한 높이 (박스 위는 유지)
-    // → 너무 위에서 보면 캐릭터 식별성 ↓, 게임성 ↓
-    const CAMERA_MIN_Y = 7.0;
-    if (ctx.camera.position.y < CAMERA_MIN_Y) {
-      ctx.camera.position.y = CAMERA_MIN_Y;
-    }
-
-    // 4.5) 카메라 셰이크 (감쇠 + 무작위 오프셋)
+    // 4.5) 카메라 셰이크 (감쇠 + 무작위 오프셋) — 1인칭은 멀미 줄이려고 강도 ↓
     if (cameraShake > 0) {
       cameraShake = Math.max(0, cameraShake - dt * 3.0);
-      const k = cameraShake * 0.5;
+      const shakeScale = SCENE.firstPerson ? SCENE.firstPersonShakeScale : 1.0;
+      const k = cameraShake * 0.5 * shakeScale;
       ctx.camera.position.x += (Math.random() - 0.5) * k;
       ctx.camera.position.y += (Math.random() - 0.5) * k;
       ctx.camera.position.z += (Math.random() - 0.5) * k;
@@ -4663,26 +5013,10 @@ function renderGame(): void {
       ctx.camera.updateProjectionMatrix();
     }
 
-    // 5) look at: 플레이어 위쪽 + 정면 살짝 앞
-    // 2026-08-15 v2: y += 1.5 → 2.5 — 카메라가 박스 너머를 안 보게 (lookAt 자체를 위로)
-    cameraLookAt.copy(selfMesh.position);
-    cameraLookAt.y += 2.5;
-    cameraLookAt.addScaledVector(cameraFacing, SCENE.cameraFollowLookAhead);
-    ctx.camera.lookAt(cameraLookAt);
-
-    // 6) 2026-08-15 v29: WASD = 카메라-상대 (이전: 캐릭터-상대 → 빙글빙글 버그)
-    // - 카메라가 보는 방향이 W, 그 좌우가 A/D
-    // - W = 카메라 forward, S = 카메라 backward, A/D = 좌우 (카메라 기준)
-    // - W+A = 카메라 forward-left 대각선 (빙글빙글 안 함)
-    // - 카메라는 chase/orbit 모드, 사용자가 드래그하면 orbit으로 전환
-    // - 캐릭터는 이동 방향으로 회전 (PlayerController.update 안의 slerp)
-    // 카메라 forward (월드) 계산
-    cameraFacing.set(0, 0, -1);
-    if (Math.abs(camState.yaw) > 0.0001) {
-      const q = yawQuatTmp.setFromAxisAngle(yawAxis, camState.yaw);
-      cameraFacing.applyQuaternion(q);
-    }
-    charForward.copy(cameraFacing); // 카메라가 보는 방향 = W
+    // 6) WASD / 조이스틱 = 카메라-상대
+    // - 1인칭: cameraFacing = face/look (getWorldDirection 반전, local -Z)
+    // - 3인칭: cameraFacing = (0,0,-1) + camState.yaw
+    charForward.copy(cameraFacing);
     charRight.crossVectors(cameraFacing, worldUp).normalize();
     player.setMoveBasis(charForward, charRight);
 

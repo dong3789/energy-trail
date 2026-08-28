@@ -45,6 +45,23 @@ describe('config invariants', () => {
       expect(SCENE.cameraFovRunner).toBeGreaterThanOrEqual(50);
       expect(SCENE.cameraFovRunner).toBeLessThanOrEqual(100);
     });
+
+    it('1인칭 카메라는 캡슐 머리 안에 들어가지 않는다', () => {
+      expect(SCENE.firstPersonOffsetBack).toBeGreaterThan(PLAYER.radius * 2);
+      expect(SCENE.firstPersonOffsetUp).toBeGreaterThan(0.5);
+    });
+
+    it('1인칭에서 자기 몸통이 화면을 채우지 않도록 충분히 뒤에 둔다', () => {
+      // 캡슐 높이 1.7m / FOV 90° 기준, 5m 뒤에서 화면 높이의 ~20%
+      expect(SCENE.firstPersonOffsetBack).toBeGreaterThanOrEqual(5);
+      expect(SCENE.firstPersonOffsetUp).toBeGreaterThan(1.5);
+    });
+  });
+
+  describe('PLAYER 라벨', () => {
+    it('자기 닉네임 스프라이트는 1인칭 시야를 가리지 않게 끈다', () => {
+      expect(PLAYER.showSelfLabel).toBe(false);
+    });
   });
 
   describe('GAME 밸런스', () => {
@@ -74,6 +91,11 @@ describe('config invariants', () => {
     it('iceDuration + iceCooldown 합이 라운드 시간보다 작음 (라운드당 여러 번 사용 가능)', () => {
       const cycle = GAME.iceDuration + GAME.iceCooldown;
       expect(cycle).toBeLessThan(GAME.roundSeconds);
+    });
+
+    it('자석은 승리 조건보다 적게만 당긴다', () => {
+      expect(GAME.itemMagnetMaxAbsorb).toBe(2);
+      expect(GAME.itemMagnetMaxAbsorb).toBeLessThan(GAME.trailGoal);
     });
 
     it('얼림 사거리는 접촉 잡기보다 충분히 크다', () => {

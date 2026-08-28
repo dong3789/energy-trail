@@ -1,0 +1,79 @@
+# 2026-08-25: 에너지트레일 운영 �업
+# - caddy: 80/443 포트로 외부 트래픽 수신, 정적(dist) 서빙 + /ws 프록시
+# - ws: Node.js ws 서버 (PORT=8791) — caddy의 /ws가 여기로 보냄
+# - 정적 자산은 호스트의 ./web-prototype/dist를 caddy에 직접 마운트 (재빌드 시 즉시 반영)
+#
+# cloudflared는 별도 launchd 서비스로 실행 — 이 compose에 포함 안 함
+# (Cloudflare 인증서/토큰이 호스트에 있어야 하므로 Docker보다 launchd가 안정적)
+#
+# 사용:
+#   docker compose up -d           # 시작
+#   docker compose down            # 종료
+#   docker compose logs -f caddy   # caddy 로그
+#   docker compose logs -f ws      # ws 로그
+#   docker compose restart ws      # 코드 변경 후 재시작
+
+services:
+  ws:
+    build:
+      context: ./web-prototype
+      dockerfile: ./Dockerfile
+    image: energy-trail-ws:latest
+    container_name: energy-trail-ws
+    restart: unless-stopped
+    environment:
+      - PORT=8791
+      # 2026-08-25: 네트워크 시뮬레이션 환경변수 — 운영에서는 절대 설정하지 말 것 (기본값 0)
+      # 테스트 시에만: SIM_LATENCY_MS, SIM_JITTER_MS, SIM_DROP_RATE
+    networks:
+      - energy-trail-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8791/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  caddy:
+    image: caddy:2
+    container_name: energy-trail-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # 2026-08-25: Caddyfile과 dist는 호스트에서 마운트 — 코드 변경 시 컨테이너 재시작 불필요
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web-prototype/dist:/srv:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - energy-trail-net
+    depends_on:
+      ws:
+        condition: service_healthy
+
+  # 2026-08-25: Cloudflare Quick Tunnel (trycloudflare.com)
+  # - profile: cf-tunnel — 사용 안 할 때 기본 compose up에서 제외
+  # - 사용법: docker compose --profile cf-tunnel up -d
+  # - caddy와 같은 네트워크 namespace 공유 → localhost 해석 우회
+  # - HTTP/2 to Origin 헤더 drop 문제 자동 우회 (QUIC 터널 처리)
+  cf-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: energy-trail-cf-quick
+    restart: unless-stopped
+    profiles: ["cf-tunnel"]
+    network_mode: "container:energy-trail-caddy"
+    command: tunnel --url http://localhost:80
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  energy-trail-net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

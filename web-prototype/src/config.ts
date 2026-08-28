@@ -220,12 +220,25 @@ export const SCENE = {
   reflectorOpacity: 0.0,
 
   // === 부스터 시 FOV 펄스 (v28: base 70 → 78) ===
-  boostFov: 78,
+  boostFov: 96,
   fovLerpSpeed: 8.0,
 
   // === v33: role별 카메라 FOV — 도망자가 술래보다 넓은 시야 (회피 유리) ===
-  cameraFovTagger: 68, // 술래: 좁고 정밀한 시야
-  cameraFovRunner: 82, // 도망자: 넓은 시야 (술래를 먼저 보자)
+  cameraFovTagger: 76, // 술래: 조금 넓혀 근접 시야 답답함 완화
+  cameraFovRunner: 90, // 도망자: 넓은 시야 (술래를 먼저 보자)
+
+  // 2026-08-27: 1인칭 카메라 (상시) — ←/→/A/D 키로 yaw 회전
+  // - 카메라 = mesh 뒤쪽 살짝 위 (FPS 표준 패턴)
+  // - mesh의 뒷모습(등/뒷머리)이 정면 시야 하단에서 보임 → 자기 위치/방향 인지
+  // - WASD/조이스틱 = 카메라 look (local -Z, face). getWorldDirection(+Z)을 쓰면 앞뒤가 뒤집힘
+  // - yaw는 mesh와 동기화 → mesh가 화면 정면에 고정 + 환경이 흐름
+  firstPerson: true,
+  // 2026-08-28: 2.2m는 젤리빈+이름표가 화면을 채움. 등 뒤 5.5m + 위 2.2m —
+  // 자기 몸은 하단의 작은 실루엣, 맵이 넓게 보임.
+  firstPersonOffsetBack: 5.5,
+  firstPersonOffsetUp: 2.2,
+  firstPersonYawSpeed: 3.0, // rad/s ≈ 172°/s — ←/→/A/D 누르고 있는 동안 누적
+  firstPersonShakeScale: 0.4, // 카메라 셰이크 감쇠 (1인칭은 멀미 줄이기 위해 살짝만)
 } as const;
 
 // ============================================================
@@ -383,6 +396,8 @@ export const PLAYER = {
   taggerHoodLightIntensity: 0.0,
   taggerHoodLightDistance: 0.0,
   showPlayerLabels: true,
+  // 1인칭 로컬 시야에서 자기 닉네임 스프라이트(2.4m)는 카메라를 가림 — 남만 표시
+  showSelfLabel: false,
   labelOffsetY: 1.4,
   taggerLabel: '술래',
   runnerLabel: '나',
@@ -487,8 +502,8 @@ export const GAME = {
   taggerPatrolTurnInterval: 2.5,
 
   // 2026-08-09 v4: 얼림 (Ice) 시스템 — 도망자가 술래를 잠시 동결
-  // 2026-08-15 v5: 1.0 → 1.2 — 도망자가 멀리서도 얼림 발동 가능
-  iceRange: 3.4,
+  // 2026-08-28: 3.4 → 8. 1인칭에선 3.4m가 거의 접촉이라 버튼을 눌러도 조용히 실패함.
+  iceRange: 8,
   iceDuration: 2.4,
   iceCooldown: 10.0,
   iceCatchGraceSeconds: 0.8,
@@ -531,6 +546,7 @@ export const GAME = {
   // 2026-08-25: 신규 아이템 7종 — 자석/방어막/대시/분신/반전/로켓/투명
   itemMagnetDuration: 6,
   itemMagnetRadius: 7,
+  itemMagnetMaxAbsorb: 2, // 한 자석당 자국 2개만. 제한 없으면 한 번에 승리 조건(8)을 채움.
   itemShieldDuration: 8,
   itemDashDistance: 6,
   itemDecoyDuration: 6,
@@ -539,6 +555,17 @@ export const GAME = {
   itemRocketDuration: 3,
   itemRocketSpeedMul: 2.0,
   itemInvisDuration: 5,
+  itemSmokeFogRange: 12, // 2026-08-25: 이 거리 이내에서 쓴 상대 연막만 화면 안개로 (원거리는 이펙트만)
+
+  // 2026-08-25: 멀티플레이어 원격 캐릭터 보간/외삽
+  // - interpolationDelayMs: 클라가 실제 시간보다 이만큼 뒤에서 그릴지. 100~150ms 권장 (네트워크 jitter 흡수)
+  // - maxExtrapolationMs: 이 시간 지나면 마지막 위치 고정 (오래된 외삽은 부정확)
+  // - sendPosHz: 자기 위치 송신 빈도. 20Hz(50ms) — 보간과 잘 어울리는 표준
+  // - peerSlerp: yaw 즉시 적용 대신 slerp factor (per RAF frame)
+  remoteInterpolationDelayMs: 100,
+  remoteMaxExtrapolationMs: 250,
+  remoteSendPosHz: 20,
+  remoteYawSlerp: 0.18,
   itemStickyDuration: 5.0,
   itemStickyRadius: 2.4,
   itemStickySlowMul: 0.45,

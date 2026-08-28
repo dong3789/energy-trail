@@ -22,7 +22,7 @@ export const ITEM_META: Record<
   smoke: { label: '연막', color: 0x9b59b6, emoji: '💨', hint: '화면 가득 안개' },
   sticky: { label: '끈끈이', color: 0xffd83d, emoji: '🍯', hint: '발밑에 둔덕' },
   decoy: { label: '분신', color: 0x7fd8ff, emoji: '🫥', hint: '술래가 분신을 쫓아요' },
-  magnet: { label: '자석', color: 0xff6b9d, emoji: '🧲', hint: '주변 자국 흡수' },
+  magnet: { label: '자석', color: 0xff6b9d, emoji: '🧲', hint: '자국 2개만 당김' },
   shield: { label: '방어막', color: 0x7dffb0, emoji: '🛡️', hint: '한 번 잡혀도 무효' },
   dash: { label: '대시', color: 0xffe14a, emoji: '⚡', hint: '즉시 점프' },
   reversal: { label: '반전', color: 0xb39dff, emoji: '🌀', hint: '술래 방향 혼란' },
@@ -138,4 +138,10 @@ export class ItemBag {
     this.held = null;
     return kind;
   }
+}
+
+/** 자석 한 번의 남은 할당량과 반경 안 자국 수 → 이번 틱에 가져갈 개수. */
+export function magnetTakeCount(budgetLeft: number, available: number, perTick = 2): number {
+  if (budgetLeft <= 0 || available <= 0) return 0;
+  return Math.min(budgetLeft, available, perTick);
 }

@@ -1,0 +1,43 @@
+# HTTPS는 cloudflared 터널이 종료 (origin은 HTTP 80).
+# Cloudflare 대시보드 → SSL/TLS → Full (Strict) 모드 사용.
+{
+    admin localhost:2019
+    auto_https off
+}
+
+:80 {
+    root * /srv
+
+    # 명시적 순서: handle 블록이 평가 순서대로 매칭 (위 → 아래)
+    # /health, /ws가 먼저 매칭되고, 나머지는 fallback이 처리
+    handle /health {
+        respond "ok" 200
+    }
+    handle /ws* {
+        reverse_proxy ws:8791
+    }
+    handle {
+        encode gzip zstd
+        try_files {path} {path}/ /index.html
+        file_server
+
+        @assets path /assets/*
+        header @assets Cache-Control "public, max-age=31536000, immutable"
+
+        # 2026-08-28: HTML/manifest는 절대 캐시하지 않음 — 배포 후 에지가
+        # 이전 index.html을 재사용해 구버전 번들을 가리키는 문제 방지
+        @html path /index.html /
+        header @html Cache-Control "no-store, must-revalidate"
+
+        header {
+            X-Content-Type-Options "nosniff"
+            X-Frame-Options "SAMEORIGIN"
+            Referrer-Policy "strict-origin-when-cross-origin"
+        }
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

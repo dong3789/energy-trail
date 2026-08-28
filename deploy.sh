@@ -57,7 +57,7 @@ docker run -d \
   energy-trail:latest > /dev/null
 
 log "실시간 방 서버..."
-docker build -q -t energy-trail-ws:latest "$REPO_ROOT/web-prototype/server" > /dev/null
+docker build -q -t energy-trail-ws:latest "$REPO_ROOT/web-prototype" -f "$REPO_ROOT/web-prototype/server/Dockerfile" > /dev/null
 docker rm -f energy-trail-ws >/dev/null 2>&1 || true
 docker run -d \
   --name energy-trail-ws \
@@ -83,6 +83,17 @@ if docker exec caddy wget -q --timeout=5 -O- --header "Host: trail.yndl.dev" htt
 else
   warn "caddy 라우트 검증 실패 — caddy reload 필요할 수 있음"
   docker exec caddy caddy reload --config /etc/caddy/Caddyfile --address localhost:2019 > /dev/null 2>&1 || true
+fi
+
+# 7) 2026-08-26: 멀티플레이어 회귀 검증 — WS 서버 정상 동작 확인
+# - test-scripts/multiplayer.cjs가 Dockerfile에 포함되어 있어 어떤 환경에서든 실행 가능
+# - 실패 시 경고만 출력 (배포는 계속 진행, 사용자가 직접 확인 가능)
+log "멀티플레이어 통합 테스트 실행..."
+if docker exec energy-trail-ws node /app/test-scripts/multiplayer.cjs > /tmp/multiplayer-test.log 2>&1; then
+  ok "멀티플레이어 테스트 통과 (test-scripts/multiplayer.cjs)"
+else
+  warn "멀티플레이어 테스트 실패 — 로그 확인 필요: /tmp/multiplayer-test.log"
+  tail -20 /tmp/multiplayer-test.log | sed 's/^/  /'
 fi
 
 git checkout main >/dev/null 2>&1 || true
