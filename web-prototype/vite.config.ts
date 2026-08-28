@@ -35,5 +35,30 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          three: ['three'],
+          game: [
+            './src/scene/CharacterFactory.ts',
+            './src/scene/PlayerController.ts',
+            './src/scene/SceneSetup.ts',
+            './src/scene/MapBuilder.ts',
+            './src/scene/TrailEmitter.ts',
+            './src/scene/AbsorbSystem.ts',
+            './src/scene/BoostSystem.ts',
+            './src/scene/IceSystem.ts',
+            './src/scene/ItemField.ts',
+            './src/scene/TaggerAI.ts',
+            './src/scene/RunnerAIStub.ts',
+            './src/scene/DustSystem.ts',
+            './src/scene/SoundManager.ts',
+            './src/scene/TouchController.ts',
+          ],
+        },
+      },
+    },
+  },
 });
 
