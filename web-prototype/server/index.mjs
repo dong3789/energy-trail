@@ -655,6 +655,7 @@ wss.on('connection', (ws) => {
       // 2026-08-26: classic 모드는 아이템 없음 — use 시도 무시.
       // 모드는 items / classic (위 'mode' 핸들러에서 정규화).
       if (room.mode === 'classic') return;
+      // 2026-08-28: kind 한 번만 슬라이스해 kind/kindUse 중복 제거 — 화이트리스트 검사·shield 가드·broadcast 모두 같은 값을 본다.
       const kind = String(msg.kind || '').slice(0, 12);
       // kind가 화이트리스트에 없거나 빈 문자열이면 무시 (silent)
       if (!ALLOWED_ITEM_KINDS.has(kind)) return;
@@ -662,11 +663,10 @@ wss.on('connection', (ws) => {
       if (nowUse - (player.lastUseAt || 0) < 400) return;
       player.lastUseAt = nowUse;
       // 2026-08-25: 방어막 — 서버 권위 추적 (catch 판정에서 차단에 사용)
-      const kindUse = String(msg.kind || '').slice(0, 12);
-      if (kindUse === 'shield' && player.role === 'runner') {
+      if (kind === 'shield') {
         player.shieldUntil = nowUse + SHIELD_MS;
       }
-      broadcast(room, { t: 'use', id: player.id, kind: kindUse }, player.id);
+      broadcast(room, { t: 'use', id: player.id, kind }, player.id);
       return;
     }
     if (t === 'ice' && room.phase === 'playing' && player.role === 'runner' && !player.out) {
