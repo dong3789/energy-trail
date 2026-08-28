@@ -2623,7 +2623,7 @@ function renderGame(): void {
     mapHalfDepth: mapHalfD,
     inputTarget: window, // v6: window (포커스 무관, 캔버스/버튼 포커스 무관하게 안정)
     collisionMargin: !isTagger ? 0.4 : 0.6, // v5: 도망자만 좁은 틈 통과 가능 (반경 0.85)
-    speedMultiplier: isTagger ? GAME.taggerPatrolSpeedMultiplier : 1.0, // v8: 술래 1.9배
+    speedMultiplier: isTagger ? GAME.taggerPatrolSpeedMultiplier : 1.0, // 2026-08-28: 동속도 밸런스 1.3배
   });
   if (!isTagger) player.setSpeedTier('sprint');
   // 2026-08-27: 1인칭 모드 — ←/→ 키로 yaw 회전, mesh 자동 회전 OFF
