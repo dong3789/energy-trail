@@ -25,6 +25,12 @@ const ICE_DURATION_MS = 2400; // GAME.iceDuration
 const ICE_COOLDOWN_MS = 10000; // GAME.iceCooldown
 const SCORE_MIN_INTERVAL_MS = 250; // 2026-08-25: 점수 연타 제한 — 배치 전송 클라이언트 기준
 const SCORE_MAX_ADD = 10; // 2026-08-25: 한 메시지당 최대 가점 (배치 n 클램프)
+// 2026-08-28: 세션 토큰 + 방 유지
+// - RESUME_TTL_MS: 마지막 연결 끊김 후 이 시간 안이면 세션 복원 (같은 신원/방장/좌석)
+// - EMPTY_ROOM_GRACE_MS: 플레이어가 모두 나간 뒤 방을 즉시 삭제하지 않고 유지 —
+//   모바일 네트워크 블립으로 대기실이 증발하는 문제 방지
+const RESUME_TTL_MS = Number(process.env.RESUME_TTL_MS || 5 * 60 * 1000);
+const EMPTY_ROOM_GRACE_MS = Number(process.env.EMPTY_ROOM_GRACE_MS || 60 * 1000);
 
 // 2026-08-25: 네트워크 시뮬레이션 (테스트/검증용) — 모바일 LTE/WiFi 전환의 가짜 재현
 // - SIM_LATENCY_MS: 평균 지연 (ms). 0이면 비활성
@@ -53,13 +59,19 @@ process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
 });
 
-/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number, shieldUntil?: number, lastScoreAt?: number, prevX?: number, prevZ?: number, vx?: number, vz?: number }} Player */
-/** @typedef {{ code: string, hostId: string, map: string, mode: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number> }} Room */
+/** @typedef {{ id: string, name: string, char: string, wish: string, x: number, z: number, yaw: number, role: 'tagger'|'runner'|'', out: boolean, ws: import('ws').WebSocket, invulnUntil: number, shieldUntil?: number, lastScoreAt?: number, prevX?: number, prevZ?: number, vx?: number, vz?: number, token?: string, lastSeenAt?: number, roomId?: string }} Player */
+/** @typedef {{ code: string, hostId: string, map: string, mode: string, phase: 'lobby'|'playing'|'ended', players: Map<string, Player>, roles: Record<string, string>, startedAt: number, score: number, createdAt: number, lastPeersRaw?: string, lastReviveAt: Map<string, number>, emptySince?: number }} Room */
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
 /** @type {Map<import('ws').WebSocket, { player: Player, room: Room | null }>} */
 const sockets = new Map();
+/** 2026-08-28: 세션 토큰 → { playerId, roomCode, expiresAt }. 연결 끊긴 플레이어의 좌석을 짧게 보존해 resume 한다. */
+const sessions = new Map();
+
+function genToken() {
+  return `s_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+}
 
 function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
@@ -69,7 +81,8 @@ function broadcast(room, msg, exceptId = '') {
   const raw = JSON.stringify(msg);
   for (const p of room.players.values()) {
     if (p.id === exceptId) continue;
-    if (p.ws.readyState === 1) p.ws.send(raw);
+    // 2026-08-28: ws가 null인 보존 좌석(resume 대기)은 건너뜀
+    if (p.ws && p.ws.readyState === 1) p.ws.send(raw);
   }
 }
 
@@ -84,12 +97,13 @@ function broadcastPeersWithSim(room, payload) {
   if (SIM_LATENCY_MS === 0 && SIM_JITTER_MS === 0 && SIM_DROP_RATE === 0) {
     // 2026-08-25: 비활성 — 오버헤드 없이 즉시 broadcast
     for (const p of room.players.values()) {
-      if (p.ws.readyState === 1) p.ws.send(payload);
+      // 2026-08-28: ws가 null인 보존 좌석(resume 대기)은 건너뜀
+      if (p.ws && p.ws.readyState === 1) p.ws.send(payload);
     }
     return;
   }
   for (const p of room.players.values()) {
-    if (p.ws.readyState !== 1) continue;
+    if (!p.ws || p.ws.readyState !== 1) continue;
     if (SIM_DROP_RATE > 0 && Math.random() < SIM_DROP_RATE) continue;
     const jitter = SIM_JITTER_MS > 0 ? (Math.random() * 2 - 1) * SIM_JITTER_MS : 0;
     const delay = Math.max(0, SIM_LATENCY_MS + jitter);
@@ -265,8 +279,15 @@ function tickPlaying(room) {
   const taggers = [...room.players.values()].filter((p) => p.role === 'tagger' && !p.out);
   const runners = [...room.players.values()].filter((p) => p.role === 'runner');
   // 2026-08-25: 술래가 매치 중 이탈하면 라운드가 끝나지 않고 타이머 만료 뒤
-  // "나간 술래 승리"로 처리되던 문제 — 술래가 없으면 즉시 도망자 승으로 종료
-  if (taggers.length === 0) {
+  // "나간 술래 승리"로 처리되던 문제 — 술래가 없으면 즉시 도망자 승으로 종료.
+  // 2026-08-28: 단, 술래 좌석이 보존 중(ws=null, resume 대기)이면 RESUME_TTL 동안
+  // 종료를 유보한다 — 순간 네트워크 블립으로 매치가 무효화되는 것 방지.
+  // 좌석 정리(tick)가 RESUME_TTL 경과 후 좌석을 지우면 그때 자연 종료된다.
+  const taggerLive = taggers.some((p) => p.ws !== null);
+  const taggerPreserved = [...room.players.values()].some(
+    (p) => p.role === 'tagger' && p.ws === null,
+  );
+  if (taggers.length === 0 || (!taggerLive && !taggerPreserved)) {
     endRoom(room, 'runner', '술래가 방을 나갔습니다');
     return;
   }
@@ -365,15 +386,24 @@ function leave(ws) {
   sockets.delete(ws);
   const { player, room } = slot;
   if (!room) return;
-  room.players.delete(player.id);
-  if (room.players.size === 0) {
-    rooms.delete(room.code);
+  // 2026-08-28: 즉시 삭제 대신 세션 보존 — 같은 토큰으로 resume 하면
+  // 같은 id/방장 여부로 복귀. TTL 지나면 tick에서 정리.
+  player.ws = null;
+  player.lastSeenAt = Date.now();
+  if (player.token) {
+    sessions.set(player.token, {
+      playerId: player.id,
+      roomCode: room.code,
+      expiresAt: player.lastSeenAt + RESUME_TTL_MS,
+    });
+  }
+  if ([...room.players.values()].some((p) => p.ws !== null)) {
+    room.emptySince = undefined;
+    broadcast(room, roomPayload(room));
     return;
   }
-  if (player.id === room.hostId) {
-    room.hostId = [...room.players.keys()][0];
-  }
-  broadcast(room, roomPayload(room));
+  // 모두 연결 끊김 — 좌석은 keep, 방은 grace 후 삭제 (tick)
+  if (room.emptySince === undefined) room.emptySince = Date.now();
 }
 
 const httpServer = createServer((req, res) => {
@@ -409,9 +439,12 @@ wss.on('connection', (ws) => {
     prevZ: 0,
     vx: 0,
     vz: 0,
+    token: genToken(),
+    lastSeenAt: Date.now(),
   };
   sockets.set(ws, { player, room: null });
-  send(ws, { t: 'welcome', id: player.id });
+  // 2026-08-28: welcome에 token 포함 — 클라는 저장했다가 resume 때 사용
+  send(ws, { t: 'welcome', id: player.id, token: player.token });
 
   ws.on('message', (data) => {
     let msg;
@@ -432,6 +465,33 @@ wss.on('connection', (ws) => {
         slot.room.map = msg.map;
         broadcast(slot.room, roomPayload(slot.room));
       }
+      return;
+    }
+    if (t === 'resume') {
+      // 2026-08-28: 세션 복원 — 끊긴 연결의 같은 플레이어(id/방장/좌석)로 복귀.
+      // hello로 닉네임 등을 갱신한 뒤 보내는 것을 권장 (클라가 그 순서로 보냄).
+      if (slot.room) return;
+      const token = typeof msg.token === 'string' ? msg.token.slice(0, 40) : '';
+      const session = sessions.get(token);
+      if (!session || session.expiresAt <= Date.now()) {
+        sessions.delete(token);
+        send(ws, { t: 'resumeDenied' });
+        return;
+      }
+      const room = rooms.get(session.roomCode);
+      const seat = room?.players.get(session.playerId);
+      if (!room || !seat || seat.ws !== null) {
+        // 좌석이 이미 사라졌거나 다른 라이브 연결이 좌석을 사용 중
+        sessions.delete(token);
+        send(ws, { t: 'resumeDenied' });
+        return;
+      }
+      sessions.delete(token);
+      seat.ws = ws;
+      player.token = token; // leave()에서 같은 토큰으로 다시 보존
+      sockets.set(ws, { player: seat, room });
+      send(ws, roomPayload(room));
+      broadcast(room, roomPayload(room));
       return;
     }
     if (t === 'create') {
@@ -465,7 +525,9 @@ wss.on('connection', (ws) => {
         .replace(/\D/g, '')
         .slice(0, 4);
       const room = rooms.get(code);
-      if (!room || room.phase !== 'lobby') {
+      // 2026-08-28: 'ended'도 join 허용 — 종료 → 대기실 전환(800ms) 사이 재접속이
+      // 에러로 떨어져 방을 잃는 문제 방지. ended 방은 resetRoomToLobby가 곧 lobby로 복귀시킴.
+      if (!room || (room.phase !== 'lobby' && room.phase !== 'ended')) {
         send(ws, {
           t: 'err',
           msg: '대기 중인 방을 찾지 못했어요. 방장이 대기실에 있는지 확인해 주세요.',
@@ -716,7 +778,36 @@ if (target.shieldUntil && target.shieldUntil > Date.now()) {
 
 setInterval(() => {
   const now = Date.now();
+  for (const [token, session] of sessions) {
+    if (session.expiresAt <= now) sessions.delete(token);
+  }
   for (const [code, room] of rooms) {
+    // 2026-08-28: 빈 방 grace 종료 — 모든 좌석이 RESUME_TTL 넘게 끊겨 있으면 삭제.
+    // playing 중인 방은 30초 유예를 주고, 그 안에 아무도 resume 하지 않으면 종료 처리.
+    if (room.emptySince !== undefined && now - room.emptySince > RESUME_TTL_MS) {
+      if (room.phase === 'playing') {
+        room.emptySince = undefined; // tickPlaying의 남은 시간/이탈 판정에 맡김
+      } else {
+        rooms.delete(code);
+        continue;
+      }
+    }
+    // 좌석 정리 — RESUME_TTL 지난 끊긴 플레이어는 방에서 제거 (방장이면 승계)
+    let removed = false;
+    for (const p of room.players.values()) {
+      if (p.ws === null && p.lastSeenAt !== undefined && now - p.lastSeenAt > RESUME_TTL_MS) {
+        room.players.delete(p.id);
+        if (p.id === room.hostId) {
+          room.hostId = [...room.players.keys()][0] ?? '';
+        }
+        removed = true;
+      }
+    }
+    if (room.players.size === 0) {
+      rooms.delete(code);
+      continue;
+    }
+    if (removed) broadcast(room, roomPayload(room));
     // 2026-08-25: 룸 TTL 처리 — phase가 'lobby'이고 생성 후 2시간 지나면 삭제.
     // rooms.delete 도중에 같은 룸을 tickPlaying가 참조하지 않도록 continue로 분리.
     if (now - room.createdAt > ROOM_TTL_MS && room.phase === 'lobby') {

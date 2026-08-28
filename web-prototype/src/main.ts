@@ -272,6 +272,30 @@ let roomCode = '';
 let roomMode: 'find' | 'create' = 'find';
 let roomJoined = true;
 let matchEntry: MatchEntryMode = 'solo';
+// 2026-08-28: 세션 토큰 영속화 — 탭 재시작/새로고침 후에도 같은 좌석(방장)으로 복귀
+const SESSION_TOKEN_KEY = 'energy-trail-session-token-v1';
+let sessionToken = '';
+try {
+  sessionToken = localStorage.getItem(SESSION_TOKEN_KEY) ?? '';
+} catch {
+  sessionToken = '';
+}
+function saveSessionToken(token: string): void {
+  sessionToken = token;
+  try {
+    localStorage.setItem(SESSION_TOKEN_KEY, token);
+  } catch {
+    /* private mode */
+  }
+}
+function clearSessionToken(): void {
+  sessionToken = '';
+  try {
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 // 2026-08-25: 클래식 모드 — 아이템 없이 체급(순수 실력)으로만 하는 모드
 let gameMode: 'items' | 'classic' = 'items';
 // 2026-08-25: 초대 링크 — ?room=CODE 로 공유된 링크를 탭하면 해당 방으로 자동 입장
@@ -298,8 +322,12 @@ async function ensureNet(): Promise<NetClient | null> {
     return null;
   }
   net = client;
+  // 2026-08-28: welcome에서 내려온 토큰을 영속화 — 다음 resume에 사용
+  client.onWelcome = () => {
+    if (client.token) saveSessionToken(client.token);
+  };
   // 2026-08-25: 연결 끊김 시 —
-  // 멀티플레이: 5초 카운트다운 후 같은 방 코드로 자동 재연결 시도 (최대 5회, exponential).
+  // 멀티플레이: 같은 방 코드로 자동 재연결 (resume → join 폴백).
   //           사용자가 cancel 누르면 즉시 로비. 마지막 시도도 실패 시 명시적 로비.
   // 솔로: 게임을 유지하고 다음 ensureNet 호출에서 재연결 (기존 동작).
   client.onDisconnect = () => {
@@ -371,6 +399,9 @@ async function tryAutoReconnect(code: string): Promise<void> {
 
   // 2026-08-25: 핵심 흐름은 lib/reconnect-flow의 reconnectFlow에 위임.
   // main.ts는 DOM/UI/상태 관리만 담당.
+  // 2026-08-28: resume-first — 저장된 세션 토큰이 있으면 같은 좌석(방장/신원) 복원을
+  // 먼저 시도하고, resumeDenied면 기존 join으로 폴백. 성공한 client는 net에 할당.
+  let liveClient: NetClient | null = null;
   const outcome = await reconnectFlow(code, profile, {
     attempt: async (joinCode, p): Promise<AttemptResult> => {
       // 기존 net 참조 정리 (이미 끊긴 상태)
@@ -382,6 +413,14 @@ async function tryAutoReconnect(code: string): Promise<void> {
         }
         net = null;
       }
+      if (liveClient) {
+        try {
+          liveClient.close();
+        } catch {
+          /* ignore */
+        }
+        liveClient = null;
+      }
       const client = new NetClient();
       const ok = await client.connect(wsUrlFromLocation(window.location));
       if (!ok) return { phase: 'failed' };
@@ -389,7 +428,7 @@ async function tryAutoReconnect(code: string): Promise<void> {
       client.onDisconnect = () => {
         /* reconnect 흐름이 관리 */
       };
-      // hello + join 응답 대기
+      // hello + (resume | join) 응답 대기
       const phase = await new Promise<'lobby' | 'playing' | 'failed'>((resolve) => {
         let resolved = false;
         const finish = (r: 'lobby' | 'playing' | 'failed'): void => {
@@ -402,6 +441,14 @@ async function tryAutoReconnect(code: string): Promise<void> {
           else finish('playing');
         };
         client.onError = () => finish('failed');
+        client.onResumeDenied = () => {
+          // 토큰 만료/좌석 소멸 — 일반 join으로 폴백
+          try {
+            client.join(joinCode);
+          } catch {
+            finish('failed');
+          }
+        };
         window.setTimeout(() => finish('failed'), 4000);
         try {
           client.hello({
@@ -410,7 +457,8 @@ async function tryAutoReconnect(code: string): Promise<void> {
             wish: p.roleWish,
             map: p.mapId,
           });
-          client.join(joinCode);
+          if (sessionToken) client.resume(sessionToken);
+          else client.join(joinCode);
         } catch {
           finish('failed');
         }
@@ -419,8 +467,9 @@ async function tryAutoReconnect(code: string): Promise<void> {
         // 다음 시도 또는 abort 시 close
         return { phase, ws: { close: () => client.close() } };
       }
-      // 성공 — 호출자가 net에 할당할 수 있게 ws 핸들 보존
-      return { phase: 'lobby', ws: { close: () => client.close() } };
+      // 성공 — 이 client를 net으로 승격 (중복 join 방지)
+      liveClient = client;
+      return { phase: 'lobby' };
     },
     closeAttempt: (ws) => {
       try {
@@ -462,15 +511,14 @@ async function tryAutoReconnect(code: string): Promise<void> {
     onTerminal: (o, attempts) => {
       cleanup();
       if (o === 'ok') {
-        // 재연결 성공 — 마지막 attempt의 ws는 호출자가 net에 이미 할당하지 않은 상태.
-        // (재연결 흐름은 closeAttempt 정책상 성공 시 ws를 닫지 않지만, 우리가 닫아도 됨)
-        // 단, lobby 응답의 client를 net에 할당해야 다음 게임 진행 가능.
-        // → 마지막 attempt에서 phase='lobby'인 client를 별도로 보존해 net에 할당.
-        // (간단화: lobby 결과 후 net=null이므로 ensureNet 다음 호출에서 재연결)
-        // → 더 안전: lobby 시 client를 별도 변수로 보관했다가 할당
+        // 2026-08-28: 성공한 client를 net에 승격 — 안전망의 중복 join을 막고
+        // 같은 좌석(방장/신원)으로 room 화면 진입.
+        if (liveClient) {
+          net = liveClient;
+          liveClient = null;
+        }
         showNetToast(`재연결 성공 (${attempts}회 시도)`);
-        // 마지막 성공 client를 net에 할당하려면 attempt에서 보관 필요.
-        // 여기서는 사용자에게 성공 알림 + 화면 갱신 (room 진입)
+        roomJoined = true;
         setScreen('room');
       } else if (o === 'abort') {
         msg.textContent = `재연결 실패 (${MAX_RECONNECT_ATTEMPTS}회). 로비로 돌아갑니다.`;
@@ -482,9 +530,8 @@ async function tryAutoReconnect(code: string): Promise<void> {
       // cancelled는 cancelBtn 핸들러에서 이미 처리
     },
   });
-  // 종료 후 lobby 결과로 net 할당이 안 된 경우 안전망
+  // 안전망 — 성공했는데 net 승격이 안 된 경우에만 재진입 (중복 join 방지)
   if (outcome === 'ok' && !net?.connected) {
-    // 다음 ensureNet에서 새 ws로 재진입
     void ensureNet().then((c) => {
       if (c) {
         c.hello({
@@ -493,7 +540,8 @@ async function tryAutoReconnect(code: string): Promise<void> {
           wish: profile.roleWish,
           map: profile.mapId,
         });
-        c.join(code);
+        if (sessionToken) c.resume(sessionToken);
+        else c.join(code);
       }
     });
   }
@@ -625,6 +673,8 @@ function setScreen(next: Screen): void {
 }
 
 function leaveToLobby(): void {
+  // 2026-08-28: 명시적 로비 복귀 — 의도적 이탈이므로 좌석 보존 세션을 폐기
+  if (sessionToken) clearSessionToken();
   net?.close();
   net = null;
   roomJoined = matchEntry !== 'room';
