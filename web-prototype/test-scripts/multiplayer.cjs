@@ -136,16 +136,31 @@ async function scenarioD_useInvalid() {
   const { A, B } = await setupRoom();
   A.ws.send(JSON.stringify({ t: 'start' }));
   await sleep(300);
-  A.ws.send(JSON.stringify({ t: 'use', kind: 'fake_item' }));
+  // 2026-08-28: role 랜덤성 명시 처리 — A가 술래면 'use'는 서버에서 silent drop
+  // (player.role === 'runner' 가드). scenario B/G처럼 start 이벤트로 role을 읽고
+  // 항상 runner가 sender가 되도록 선택. + 양쪽 검증으로 sender 제외 broadcast도 점검.
+  const aStart = A.events.find((e) => e.t === 'start');
+  const aRole = aStart.roles[A.id];
+  const sender = aRole === 'runner' ? A : B;
+  const observer = aRole === 'runner' ? B : A;
+
+  // 1) invalid kind — 화이트리스트 미스, silent
+  sender.ws.send(JSON.stringify({ t: 'use', kind: 'fake_item' }));
   await sleep(300);
-  const aUse = A.events.filter(e => e.t === 'use').length;
-  const bUse = B.events.filter(e => e.t === 'use').length;
+  const aUse = A.events.filter((e) => e.t === 'use').length;
+  const bUse = B.events.filter((e) => e.t === 'use').length;
   assert(aUse === 0, `A got 0 use events (got ${aUse})`);
   assert(bUse === 0, `B got 0 use events (got ${bUse})`);
-  A.ws.send(JSON.stringify({ t: 'use', kind: 'jelly' }));
+
+  // 2) valid kind — sender 제외 broadcast, observer만 받음
+  sender.ws.send(JSON.stringify({ t: 'use', kind: 'jelly' }));
   await sleep(300);
-  const bUse2 = B.events.filter(e => e.t === 'use').length;
-  assert(bUse2 === 1, `B got 1 use event (sender excluded) (got ${bUse2})`);
+  const aUse2 = A.events.filter((e) => e.t === 'use').length;
+  const bUse2 = B.events.filter((e) => e.t === 'use').length;
+  const senderUse = sender === A ? aUse2 : bUse2;
+  const observerUse = sender === A ? bUse2 : aUse2;
+  assert(senderUse === 0, `sender got 0 use events (sender excluded) (got ${senderUse})`);
+  assert(observerUse === 1, `observer got 1 use event (got ${observerUse})`);
   A.ws.close(); B.ws.close();
 }
 

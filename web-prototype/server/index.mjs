@@ -70,7 +70,10 @@ const sockets = new Map();
 const sessions = new Map();
 
 function genToken() {
-  return `s_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+  // 2026-08-28: 보안 강화 — Math.random()은 암호학적 안전성 없음. 토큰이 세션 신원+방장 권한을
+  // 부여하므로 crypto.randomUUID() 기반 128비트 엔트로피로 교체. resume 핸들러의 40자 슬라이스
+  // 한도 내 (현재 토큰 길이: s_ + 32 hex = 34자).
+  return `s_${crypto.randomUUID().replace(/-/g, '')}`;
 }
 
 function send(ws, msg) {
@@ -155,7 +158,9 @@ function genCode() {
 }
 
 function genId() {
-  return `p_${Math.random().toString(36).slice(2, 10)}`;
+  // 2026-08-28: genToken과 동일 패턴 — Math.random() → crypto.randomUUID().
+  // player.id는 게임 세션 내 식별자이지만, 같은 함수 패밀리 일관성과 충돌 안전성 강화 차원에서 함께 정리.
+  return `p_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
 
 function placePlayers(room) {
@@ -652,6 +657,7 @@ wss.on('connection', (ws) => {
       // 2026-08-26: classic 모드는 아이템 없음 — use 시도 무시.
       // 모드는 items / classic (위 'mode' 핸들러에서 정규화).
       if (room.mode === 'classic') return;
+      // 2026-08-28: kind 한 번만 슬라이스해 kind/kindUse 중복 제거 — 화이트리스트 검사·shield 가드·broadcast 모두 같은 값을 본다.
       const kind = String(msg.kind || '').slice(0, 12);
       // kind가 화이트리스트에 없거나 빈 문자열이면 무시 (silent)
       if (!ALLOWED_ITEM_KINDS.has(kind)) return;
@@ -659,11 +665,10 @@ wss.on('connection', (ws) => {
       if (nowUse - (player.lastUseAt || 0) < 400) return;
       player.lastUseAt = nowUse;
       // 2026-08-25: 방어막 — 서버 권위 추적 (catch 판정에서 차단에 사용)
-      const kindUse = String(msg.kind || '').slice(0, 12);
-      if (kindUse === 'shield' && player.role === 'runner') {
+      if (kind === 'shield') {
         player.shieldUntil = nowUse + SHIELD_MS;
       }
-      broadcast(room, { t: 'use', id: player.id, kind: kindUse }, player.id);
+      broadcast(room, { t: 'use', id: player.id, kind }, player.id);
       return;
     }
     if (t === 'ice' && room.phase === 'playing' && player.role === 'runner' && !player.out) {
