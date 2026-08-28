@@ -16,6 +16,9 @@ concurrency:
   group: energy-trail-production
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: Mac mini origin
@@ -23,6 +26,7 @@ jobs:
     timeout-minutes: 20
     env:
       PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Deploy tag to live origin
         env:
@@ -38,6 +42,9 @@ jobs:
             git status -sb
             exit 1
           fi
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" fetch --quiet --tags origin
+          git checkout main
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" pull --ff-only origin main
           ./deploy.sh "$TAG"
 
       - name: Verify live
