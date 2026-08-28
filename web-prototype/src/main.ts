@@ -48,7 +48,6 @@ import { retryScreenForEntry, shouldTeardownGame, type MatchEntryMode } from './
 import {
   canEnterWithCode,
   isCompleteRoomCode,
-  lookupRoom,
   normalizeRoomCode,
   pruneRooms,
   upsertRoom,
@@ -64,7 +63,7 @@ import {
 } from './lib/chase';
 import { matchSpawns } from './lib/spawn-layout';
 import { NetClient, type NetPeer, wsUrlFromLocation } from './lib/net';
-import { MAX_RECONNECT_ATTEMPTS, decideReconnect, waitBeforeNextAttempt } from './lib/reconnect';
+import { MAX_RECONNECT_ATTEMPTS, waitBeforeNextAttempt } from './lib/reconnect';
 import { reconnectFlow, type AttemptResult } from './lib/reconnect-flow';
 import { serverEpochToClientPerf } from './lib/time-sync';
 import { judgeTrailRound } from './lib/round-rules';
@@ -702,13 +701,6 @@ function button(label: string, action: () => void, className = ''): HTMLButtonEl
   element.type = 'button';
   element.textContent = label;
   element.addEventListener('click', action);
-  return element;
-}
-
-function panel(title: string, subtitle: string): HTMLElement {
-  const element = document.createElement('section');
-  element.className = 'panel';
-  element.innerHTML = `<p class="eyebrow">ENERGY TRAIL</p><h1>${title}</h1><p class="subtitle">${subtitle}</p>`;
   return element;
 }
 
@@ -1978,9 +1970,6 @@ function renderGame(): void {
       }
     }, 3000);
   }
-  function hideActionPrompt(): void {
-    actionPrompt.classList.remove('show');
-  }
 
   // 2026-08-15 v4: 설정 버튼 (우상단) — 일시정지 메뉴 진입
   const settingsBtn = document.createElement('button');
@@ -2074,7 +2063,6 @@ function renderGame(): void {
   game.exitDisc = exitDisc;
   // 출구 위치 (XZ 평면, Y 무시)
   const exitPos = new THREE.Vector3(exitDisc.position.x, 0, exitDisc.position.z);
-  const exitRadius = 1.4; // buildExitPoint의 CylinderGeometry radius와 일치
 
   const mapHalfW = MAP.width / 2 - MAP.wallThickness;
 
@@ -3040,7 +3028,6 @@ function renderGame(): void {
     );
   }
   const taggerBot = bots.find((b) => b.role === 'tagger');
-  const taggerMeshRef = taggerBot?.mesh ?? null;
   const taggerMaterialRef = taggerBot?.material ?? null;
   const originalTaggerEmissive = taggerMaterialRef ? taggerMaterialRef.emissive.getHex() : 0;
   const originalTaggerIntensity = taggerMaterialRef ? taggerMaterialRef.emissiveIntensity : 0;
@@ -3287,7 +3274,6 @@ function renderGame(): void {
   });
 
   // v5: 부스터 게이지 HUD (술래만)
-  let boostBar: HTMLElement | null = null;
   let boostFill: HTMLElement | null = null;
   let boostStatus: HTMLElement | null = null;
   let shotBar: HTMLElement | null = null;
@@ -3302,7 +3288,6 @@ function renderGame(): void {
       <div class="boost-status" id="boost-status">대기</div>
     `;
     wrap.appendChild(boostWrap);
-    boostBar = boostWrap.querySelector<HTMLElement>('.boost-bar');
     boostFill = boostWrap.querySelector<HTMLElement>('#boost-fill');
     boostStatus = boostWrap.querySelector<HTMLElement>('#boost-status');
   }
@@ -3951,9 +3936,6 @@ function renderGame(): void {
   if (outLobbyBtn) {
     outLobbyBtn.addEventListener('click', () => leaveToLobby());
   }
-
-  // === 거리 비교 헬퍼 ===
-  const distVec = new THREE.Vector3();
 
   // 2026-08-15: 이동 바운스 (Y 살짝 출렁임)
   const prevPos = new THREE.Vector3().copy(selfMesh.position);

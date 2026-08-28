@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { reconnectFlow, type AttemptResult } from './reconnect-flow';
 import { MAX_RECONNECT_ATTEMPTS } from './reconnect';
 
@@ -145,12 +145,8 @@ describe('reconnectFlow', () => {
 
   it('abort도 onTerminal 호출', async () => {
     const events: Array<{ outcome: string; attempts: number }> = [];
-    let calls = 0;
     await reconnectFlow('1234', profile, {
-      attempt: async () => {
-        calls += 1;
-        return { phase: 'failed' };
-      },
+      attempt: async () => ({ phase: 'failed' }),
       sleep: () => Promise.resolve(),
       onTerminal: (outcome, attempts) => events.push({ outcome, attempts }),
     });
@@ -214,7 +210,7 @@ describe('reconnectFlow', () => {
         if (calls >= cancelAfter) shouldCancel = true;
         return { phase: 'failed' };
       },
-      sleep: async (ms) => {
+      sleep: async () => {
         // sleep 동안 cancel 토글됨
       },
       shouldCancel: () => shouldCancel,
