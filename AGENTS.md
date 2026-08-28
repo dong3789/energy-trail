@@ -8,10 +8,10 @@
 
 ```
 energy-trail/
-├── .github/workflows/      # ci.yml (PR/main 푸시마다)
+├── .github/workflows/      # ci.yml (PR/main) + deploy.yml (Release → Mac mini)
 ├── Caddyfile               # reverse proxy + 정적 호스팅 + /ws 프록시
 ├── docker-compose.yml      # caddy + ws 컨테이너 정의
-├── deploy.sh               # Mac mini 배포 스크립트 (태그 checkout → build → docker 재시작)
+├── deploy.sh               # Mac mini 배포 스크립트. GitHub Release 시 self-hosted runner가 실행
 ├── web-prototype/          # 실제 코드 — 여기로 들어가서 작업
 │   ├── server/             # 멀티플레이어 WS 서버 (Node.js, ws 라이브러리)
 │   ├── src/
@@ -223,7 +223,7 @@ ws://0.tcp.jp.ngrok.io:28849/ws
 ## 일반 함정
 
 - **zsh scm_breeze 래퍼**: 환경에서 `git`이 `_safe_eval` 미정의 오류로 실패한다. 실제 바이너리 `/opt/homebrew/bin/git` 사용. **CI/스크립트는 영향 없음**, 로컬 zsh에서만 문제.
-- **deploy.sh**: Mac mini 배포 스크립트. 태그 checkout → npm ci → build → docker 재기동. main 푸시로 자동 실행 X, 릴리스 태그 발행 후 수동 실행.
+- **deploy.sh**: Mac mini 배포 스크립트. 태그 checkout → npm ci → build → nginx dist reload + ws 이미지 교체. `gh release create` 하면 self-hosted runner(`yoon-macmini-energy-trail`)가 운영 경로에서 자동 실행. main 푸시만으로는 배포되지 않음.
 - **모바일 우선**: 입력/UI/세션 길이 모두 모바일 기준. PC 데스크탑 입력에 최적화하지 말 것.
 - **.gstack 디렉토리**: 사용자 환경(gstack 도구) 캐시. 수정 금지.
 
