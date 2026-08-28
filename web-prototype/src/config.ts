@@ -489,7 +489,9 @@ export const GAME = {
   shotKey: 'KeyF',
   shotClickKey: 'Pointer0',
   shotRange: 12,
-  shotCooldown: 2.2,
+  // 2026-08-28: 2.2 → 2.5 — 동속도 밸런스(v2026.08.28.01)에서 그물이 유일한 안정 잡기 수단이
+  // 된 만큼 연사 부담을 줘서 술래가 한 발 빗나가면 포지셔닝으로 기회를 만들어야 한다.
+  shotCooldown: 2.5,
   shotSpeed: 16,
   shotRadius: 1.15,
   shotNetRadiusMax: 2.7,
