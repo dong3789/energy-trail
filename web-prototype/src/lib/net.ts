@@ -51,6 +51,8 @@ export class NetClient {
   map = 'park';
   mode = 'items';
   phase = 'lobby';
+  /** 2026-08-28: 서버가 발급한 세션 토큰 — localStorage에 저장 후 resume에 사용 */
+  token = '';
   players: NetPlayerInfo[] = [];
   peers = new Map<string, NetPeer>();
   roles: Record<string, NetRole> = {};
@@ -64,6 +66,8 @@ export class NetClient {
   lastError = '';
   private pending: Array<(ok: boolean) => void> = [];
   onRoom: ((c: NetClient) => void) | null = null;
+  /** welcome 수신 직후 — 토큰 영속화 훅 */
+  onWelcome: (() => void) | null = null;
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
   onUse: ((id: string, kind: string) => void) | null = null;
@@ -77,6 +81,8 @@ export class NetClient {
   onEnd: ((winner: NetRole, reason: string) => void) | null = null;
   onLobby: ((c: NetClient) => void) | null = null;
   onError: ((msg: string) => void) | null = null;
+  /** 2026-08-28: resume 실패 — 토큰 만료/좌석 소멸. 호출자는 일반 join으로 폴백 */
+  onResumeDenied: (() => void) | null = null;
   // 2026-08-25: 연결 끊김 전파 — 끊겨도 유저가 인지 못 하고 멈춘 방에 남아있던 문제 방지.
   // 성공적인 연결 이후 close/error/무음(15초) 감지 시 소켓 수명당 정확히 1회 호출.
   onDisconnect: ((reason: 'closed' | 'error' | 'timeout') => void) | null = null;
@@ -135,6 +141,11 @@ export class NetClient {
 
   join(code: string): void {
     this.send({ t: 'join', code });
+  }
+
+  /** 2026-08-28: 세션 토큰으로 같은 좌석(방장/신원) 복원 시도 */
+  resume(token: string): void {
+    this.send({ t: 'resume', token });
   }
 
   setWish(wish: NetWish): void {
@@ -219,7 +230,17 @@ export class NetClient {
 
   private processMessage(msg: Record<string, unknown>): void {
     const t = msg.t;
-    if (t === 'welcome' && typeof msg.id === 'string') this.id = msg.id;
+    if (t === 'welcome' && typeof msg.id === 'string') {
+      this.id = msg.id;
+      // 2026-08-28: 서버가 새 토큰을 내려주면 갱신 (resume 전 새 세션도 커버)
+      if (typeof msg.token === 'string' && msg.token) {
+        this.token = msg.token;
+        this.onWelcome?.();
+      }
+    }
+    if (t === 'resumeDenied') {
+      this.onResumeDenied?.();
+    }
     if (t === 'err' && typeof msg.msg === 'string') {
       this.lastError = msg.msg;
       this.onError?.(msg.msg);
