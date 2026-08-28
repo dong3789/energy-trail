@@ -19,6 +19,15 @@ ok() { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m⚠\033[0m %s\n" "$*"; }
 err() { printf "\033[1;31m✗\033[0m %s\n" "$*" >&2; }
 
+# launchd/Actions 환경에는 osxkeychain 프롬프트가 없다. GITHUB_TOKEN이 있으면 그걸 쓴다.
+git_net() {
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" "$@"
+  else
+    git "$@"
+  fi
+}
+
 TAG="${1:-}"
 if [ -z "$TAG" ]; then
   err "사용법: ./deploy.sh <tag>  (예: ./deploy.sh v2026.08.28.01)"
@@ -32,9 +41,9 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 log "태그 $TAG 가져오는 중..."
-git fetch --quiet --tags origin
+git_net fetch --quiet --tags origin
 if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
-  git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG"
+  git_net fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG"
 fi
 if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
   err "태그 없음: $TAG"
@@ -121,6 +130,6 @@ else
 fi
 
 git checkout main >/dev/null 2>&1 || true
-git pull --ff-only origin main >/dev/null 2>&1 || true
+git_net pull --ff-only origin main >/dev/null 2>&1 || true
 
 ok "배포 완료 — $TAG → https://trail.yndl.dev"
