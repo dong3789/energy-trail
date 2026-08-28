@@ -24,6 +24,11 @@
         @assets path /assets/*
         header @assets Cache-Control "public, max-age=31536000, immutable"
 
+        # 2026-08-28: HTML/manifest는 절대 캐시하지 않음 — 배포 후 에지가
+        # 이전 index.html을 재사용해 구버전 번들을 가리키는 문제 방지
+        @html path /index.html /
+        header @html Cache-Control "no-store, must-revalidate"
+
         header {
             X-Content-Type-Options "nosniff"
             X-Frame-Options "SAMEORIGIN"
