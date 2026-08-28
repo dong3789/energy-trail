@@ -70,7 +70,10 @@ const sockets = new Map();
 const sessions = new Map();
 
 function genToken() {
-  return `s_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+  // 2026-08-28: 보안 강화 — Math.random()은 암호학적 안전성 없음. 토큰이 세션 신원+방장 권한을
+  // 부여하므로 crypto.randomUUID() 기반 128비트 엔트로피로 교체. resume 핸들러의 40자 슬라이스
+  // 한도 내 (현재 토큰 길이: s_ + 32 hex = 34자).
+  return `s_${crypto.randomUUID().replace(/-/g, '')}`;
 }
 
 function send(ws, msg) {
