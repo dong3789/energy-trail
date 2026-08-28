@@ -158,7 +158,9 @@ function genCode() {
 }
 
 function genId() {
-  return `p_${Math.random().toString(36).slice(2, 10)}`;
+  // 2026-08-28: genToken과 동일 패턴 — Math.random() → crypto.randomUUID().
+  // player.id는 게임 세션 내 식별자이지만, 같은 함수 패밀리 일관성과 충돌 안전성 강화 차원에서 함께 정리.
+  return `p_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
 
 function placePlayers(room) {
