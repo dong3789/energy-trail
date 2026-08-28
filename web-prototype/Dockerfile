@@ -8,6 +8,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY server ./server
+COPY test-scripts ./test-scripts
 
 EXPOSE 8791
 ENV PORT=8791

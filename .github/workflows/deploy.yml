@@ -1,0 +1,48 @@
+# GitHub Release 발행 → Mac mini self-hosted runner가 운영 경로에서 deploy.sh 실행.
+# dist는 이 머신의 bind-mount라 actions/checkout(_work)에 빌드하면 라이브에 안 나간다.
+name: Deploy production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '배포할 태그 (예: v2026.08.28.01)'
+        required: true
+        type: string
+
+concurrency:
+  group: energy-trail-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Mac mini origin
+    runs-on: [self-hosted, mac-mini, energy-trail]
+    timeout-minutes: 20
+    env:
+      PATH: /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+    steps:
+      - name: Deploy tag to live origin
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+          PROD: /Users/yoon/Documents/내 동 보관함/HOME/01_Projects/EnergyTrail
+        run: |
+          set -euo pipefail
+          unset NODE_ENV
+          : "${TAG:?tag required}"
+          cd "$PROD"
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "production worktree is dirty; refusing to deploy"
+            git status -sb
+            exit 1
+          fi
+          ./deploy.sh "$TAG"
+
+      - name: Verify live
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 15 https://trail.yndl.dev/health | grep -qx ok
+          curl -fsS --max-time 15 https://trail.yndl.dev/ | grep -q 'index-[A-Za-z0-9_-]*\.js'
+          echo "live ok"

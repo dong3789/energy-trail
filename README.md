@@ -136,7 +136,7 @@ main (보호됨, 직접 push 금지)
 2. 커밋 (lint + typecheck + test 통과)
 3. `main`에 PR 생성 → CI 자동 실행
 4. PR 리뷰 (셀프) → squash merge
-5. main에 머지되면 릴리스 태그 발행 (`gh release create`) → Mac mini에서 `deploy.sh <tag>` 수동 배포
+5. main에 머지되면 릴리스 태그 발행 (`gh release create`) → Mac mini self-hosted runner가 `deploy.sh` 자동 실행
 
 **브랜치 보호 규칙** (GitHub Settings → Branches):
 - ✅ Require pull request reviews before merging
@@ -160,12 +160,13 @@ PR / main push마다 자동 실행:
 
 ### 배포 (Mac mini + Docker/Caddy)
 
-`main` 푸시는 CI만 트리거. 실제 배포는:
+`main` 푸시는 CI만 트리거. 운영 반영은 **GitHub Release**가 트리거다.
 
-1. **릴리스 태그 발행**: `gh release create --target main` → `v2026.05.30.1` 형식
-2. **Mac mini 배포**: `~/Desktop/ftp/energy-trail` 워크트리에서 `./deploy.sh v2026.05.30.1`
-3. 스크립트가 태그 checkout → `npm ci` → `npm run build` → docker 재기동
+1. **릴리스 발행**: `gh release create --target main` → `v2026.08.28.01` 형식
+2. Mac mini self-hosted runner(`yoon-macmini-energy-trail`)가 `.github/workflows/deploy.yml`을 받아 운영 클론에서 `./deploy.sh <tag>` 실행
+3. 스크립트가 태그 checkout → `npm ci` → `npm run build` → nginx dist reload + `energy-trail-ws` 이미지 교체
 4. **Caddy 라우팅**: `trail.yndl.dev` → `energy-trail:80` (Cloudflare Tunnel)
+5. 수동 재배포: Actions → Deploy production → Run workflow, 또는 맥 미니에서 `./deploy.sh <tag>`
 
 ## 배포 환경
 
