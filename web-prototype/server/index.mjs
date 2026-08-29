@@ -483,6 +483,9 @@ wss.on('connection', (ws) => {
     }
     const slot = sockets.get(ws);
     if (!slot) return;
+    // resume/reclaim 이후 좌석은 slot.player. 연결 직후 만든 player 클로저를 쓰면
+    // 방장 start가 hostId와 안 맞아 무시된다.
+    const player = slot.player;
     const { t } = msg;
     if (t === 'hello') {
       if (typeof msg.name === 'string' && msg.name.trim())

@@ -10,6 +10,7 @@
 //   L: resume 후 방장 위임 없음 확인 (구 join은 방장을 잃었었음)
 //   M: 끊김 후 join+token → 유령 좌석 회수 (같은 닉이 두 좌석이 되면 안 됨)
 //   N: 같은 소켓 join 두 번 → 좌석 추가 없음
+//   O: 방장 resume 후 start가 방에 방송되어야 함
 
 const WebSocket = require('ws');
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:8791/ws';
@@ -194,6 +195,37 @@ async function scenarioM_joinTokenReclaimsGhost() {
   B.ws.close();
 }
 
+async function scenarioO_hostResumeCanStart() {
+  log('\n=== O: 방장 resume 후 start가 먹혀야 함 ===');
+  const A = await client('P1');
+  A.ws.send(JSON.stringify({ t: 'create' }));
+  const roomMsg = await waitEvent(A.events, 'room');
+  const code = roomMsg.code;
+  const B = await client('P2');
+  B.ws.send(JSON.stringify({ t: 'join', code }));
+  await sleep(200);
+  const tokenA = A.token;
+  A.ws.close();
+  await sleep(300);
+
+  const events2 = [];
+  const ws2 = new WebSocket(WS_URL);
+  await new Promise((res) => ws2.on('open', res));
+  ws2.on('message', (d) => events2.push(JSON.parse(String(d))));
+  await waitEvent(events2, 'welcome');
+  ws2.send(JSON.stringify({ t: 'hello', name: 'P1', char: 'runner-cyan', wish: 'random', map: 'park' }));
+  ws2.send(JSON.stringify({ t: 'resume', token: tokenA }));
+  const back = await waitEvent(events2, 'room');
+  assert(!!back && back.hostId, '방장 resume 후 room 수신');
+
+  const bBefore = B.events.length;
+  ws2.send(JSON.stringify({ t: 'start' }));
+  const started = await waitEvent(B.events, 'start', bBefore, 2000);
+  assert(!!started, '방장 resume 후 start가 방에 방송됨');
+  ws2.close();
+  B.ws.close();
+}
+
 async function scenarioN_doubleJoinSameSocket() {
   log('\n=== N: 같은 소켓 join 두 번 → 좌석 추가 없음 ===');
   const A = await client('P1');
@@ -219,6 +251,7 @@ async function main() {
     await scenarioJ_emptyRoomGraceAndFallback(); await sleep(300);
     await scenarioK_resumeTwiceDenied(); await sleep(300);
     await scenarioM_joinTokenReclaimsGhost(); await sleep(300);
+    await scenarioO_hostResumeCanStart(); await sleep(300);
     await scenarioN_doubleJoinSameSocket();
     log(`\n=== 결과: ${pass} pass, ${fail} fail ===`);
     process.exit(fail === 0 ? 0 : 1);
