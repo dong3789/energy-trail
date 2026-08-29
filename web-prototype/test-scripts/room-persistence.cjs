@@ -64,6 +64,7 @@ async function scenarioI_resumeKeepsHost() {
   const A = await client('P1');
   A.ws.send(JSON.stringify({ t: 'create' }));
   const roomMsg = await waitEvent(A.events, 'room');
+  assert(roomMsg && roomMsg.selfId === A.id, `create selfId=${roomMsg && roomMsg.selfId} me=${A.id}`);
   const code = roomMsg.code;
   const B = await client('P2');
   B.ws.send(JSON.stringify({ t: 'join', code }));
@@ -217,6 +218,7 @@ async function scenarioO_hostResumeCanStart() {
   ws2.send(JSON.stringify({ t: 'resume', token: tokenA }));
   const back = await waitEvent(events2, 'room');
   assert(!!back && back.hostId, '방장 resume 후 room 수신');
+  assert(back && back.selfId === back.hostId, `resume selfId가 방장 (${back && back.selfId})`);
 
   const bBefore = B.events.length;
   ws2.send(JSON.stringify({ t: 'start' }));
