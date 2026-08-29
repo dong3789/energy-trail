@@ -8,6 +8,8 @@
 //   J: 모두 끊겨도 방 유지 (grace) → resume로 재합류 + join 폴백 동작
 //   K: 잘못된 토큰 → resumeDenied
 //   L: resume 후 방장 위임 없음 확인 (구 join은 방장을 잃었었음)
+//   M: 끊김 후 join+token → 유령 좌석 회수 (같은 닉이 두 좌석이 되면 안 됨)
+//   N: 같은 소켓 join 두 번 → 좌석 추가 없음
 
 const WebSocket = require('ws');
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:8791/ws';
@@ -160,13 +162,64 @@ async function scenarioK_resumeTwiceDenied() {
   third.ws.close();
 }
 
+async function scenarioM_joinTokenReclaimsGhost() {
+  log('\n=== M: 끊김 후 join+token → 유령 좌석 회수 (중복 없음) ===');
+  const A = await client('P1');
+  A.ws.send(JSON.stringify({ t: 'create' }));
+  const roomMsg = await waitEvent(A.events, 'room');
+  const code = roomMsg.code;
+  const B = await client('P2');
+  B.ws.send(JSON.stringify({ t: 'join', code }));
+  await sleep(200);
+  const tokenA = A.token;
+  const idA = A.id;
+  A.ws.close();
+  await sleep(300);
+
+  const events2 = [];
+  const ws2 = new WebSocket(WS_URL);
+  await new Promise((res) => ws2.on('open', res));
+  ws2.on('message', (d) => events2.push(JSON.parse(String(d))));
+  await waitEvent(events2, 'welcome');
+  ws2.send(JSON.stringify({ t: 'hello', name: 'P1', char: 'runner-cyan', wish: 'random', map: 'park' }));
+  ws2.send(JSON.stringify({ t: 'join', code, token: tokenA }));
+  const room = await waitEvent(events2, 'room');
+  assert(!!room, 'join 응답 수신');
+  const n = room && room.players ? room.players.length : -1;
+  const names = room && room.players ? room.players.map((p) => p.name).join(',') : '';
+  assert(n === 2, `좌석 수 2 (got ${n}: ${names})`);
+  assert(room && room.players.some((p) => p.id === idA), '원래 P1 id로 회수');
+  assert(room && room.players.filter((p) => p.name === 'P1').length === 1, 'P1 닉 하나');
+  ws2.close();
+  B.ws.close();
+}
+
+async function scenarioN_doubleJoinSameSocket() {
+  log('\n=== N: 같은 소켓 join 두 번 → 좌석 추가 없음 ===');
+  const A = await client('P1');
+  A.ws.send(JSON.stringify({ t: 'create' }));
+  const roomMsg = await waitEvent(A.events, 'room');
+  const code = roomMsg.code;
+  const B = await client('P2');
+  B.ws.send(JSON.stringify({ t: 'join', code }));
+  await sleep(150);
+  B.ws.send(JSON.stringify({ t: 'join', code }));
+  await sleep(150);
+  const lastRoom = [...B.events].reverse().find((e) => e.t === 'room');
+  assert(!!lastRoom && lastRoom.players.length === 2, `재join해도 2명 (got ${lastRoom && lastRoom.players.length})`);
+  A.ws.close();
+  B.ws.close();
+}
+
 async function main() {
   log(`WS: ${WS_URL}`);
   try {
     await scenarioH_welcomeToken(); await sleep(300);
     await scenarioI_resumeKeepsHost(); await sleep(300);
     await scenarioJ_emptyRoomGraceAndFallback(); await sleep(300);
-    await scenarioK_resumeTwiceDenied();
+    await scenarioK_resumeTwiceDenied(); await sleep(300);
+    await scenarioM_joinTokenReclaimsGhost(); await sleep(300);
+    await scenarioN_doubleJoinSameSocket();
     log(`\n=== 결과: ${pass} pass, ${fail} fail ===`);
     process.exit(fail === 0 ? 0 : 1);
   } catch (err) {
