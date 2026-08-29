@@ -66,8 +66,10 @@ export class NetClient {
   lastError = '';
   private pending: Array<(ok: boolean) => void> = [];
   onRoom: ((c: NetClient) => void) | null = null;
-  /** welcome 수신 직후 — 토큰 영속화 훅 */
+  /** welcome 수신 직후 — 토큰 영속화는 onRoom에서 (welcome은 임시 id) */
   onWelcome: (() => void) | null = null;
+  /** 방에 앉은 뒤 — 좌석 토큰을 저장 */
+  onSeated: ((token: string, id: string) => void) | null = null;
   onStart: ((c: NetClient) => void) | null = null;
   onCaught: ((id: string) => void) | null = null;
   onUse: ((id: string, kind: string) => void) | null = null;
@@ -139,8 +141,8 @@ export class NetClient {
     this.send({ t: 'create', map });
   }
 
-  join(code: string): void {
-    this.send({ t: 'join', code });
+  join(code: string, resumeToken = ''): void {
+    this.send(resumeToken ? { t: 'join', code, token: resumeToken } : { t: 'join', code });
   }
 
   /** 2026-08-28: 세션 토큰으로 같은 좌석(방장/신원) 복원 시도 */
@@ -255,6 +257,7 @@ export class NetClient {
       this.mode = String(msg.mode || this.mode);
       this.phase = String(msg.phase || 'lobby');
       this.players = Array.isArray(msg.players) ? (msg.players as NetPlayerInfo[]) : [];
+      if (this.token) this.onSeated?.(this.token, this.id);
       this.onRoom?.(this);
       if (wasMatch && this.phase === 'lobby') this.onLobby?.(this);
       const wait = this.pending.shift();

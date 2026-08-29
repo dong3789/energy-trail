@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
+import { decideJoin } from './join-policy.mjs';
 
 const PORT = Number(process.env.PORT || 8791);
 const TICK_MS = 80;
@@ -74,6 +75,28 @@ function genToken() {
   // 부여하므로 crypto.randomUUID() 기반 128비트 엔트로피로 교체. resume 핸들러의 40자 슬라이스
   // 한도 내 (현재 토큰 길이: s_ + 32 hex = 34자).
   return `s_${crypto.randomUUID().replace(/-/g, '')}`;
+}
+
+function lookupSession(token) {
+  if (!token) return null;
+  const session = sessions.get(token);
+  if (!session || session.expiresAt <= Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  return session;
+}
+
+/** 유령 좌석(ws=null)에 이 소켓을 붙이고, 클라 id/토큰을 좌석 기준으로 다시 내려준다. */
+function attachSeat(ws, seat, room, token) {
+  sessions.delete(token);
+  seat.ws = ws;
+  seat.token = token;
+  seat.lastSeenAt = Date.now();
+  sockets.set(ws, { player: seat, room });
+  send(ws, { t: 'welcome', id: seat.id, token });
+  send(ws, roomPayload(room));
+  broadcast(room, roomPayload(room));
 }
 
 function send(ws, msg) {
@@ -477,26 +500,15 @@ wss.on('connection', (ws) => {
       // hello로 닉네임 등을 갱신한 뒤 보내는 것을 권장 (클라가 그 순서로 보냄).
       if (slot.room) return;
       const token = typeof msg.token === 'string' ? msg.token.slice(0, 40) : '';
-      const session = sessions.get(token);
-      if (!session || session.expiresAt <= Date.now()) {
-        sessions.delete(token);
-        send(ws, { t: 'resumeDenied' });
-        return;
-      }
-      const room = rooms.get(session.roomCode);
+      const session = lookupSession(token);
+      const room = session ? rooms.get(session.roomCode) : null;
       const seat = room?.players.get(session.playerId);
-      if (!room || !seat || seat.ws !== null) {
-        // 좌석이 이미 사라졌거나 다른 라이브 연결이 좌석을 사용 중
-        sessions.delete(token);
+      if (!session || !room || !seat || seat.ws !== null) {
+        if (token) sessions.delete(token);
         send(ws, { t: 'resumeDenied' });
         return;
       }
-      sessions.delete(token);
-      seat.ws = ws;
-      player.token = token; // leave()에서 같은 토큰으로 다시 보존
-      sockets.set(ws, { player: seat, room });
-      send(ws, roomPayload(room));
-      broadcast(room, roomPayload(room));
+      attachSeat(ws, seat, room, token);
       return;
     }
     if (t === 'create') {
@@ -530,19 +542,50 @@ wss.on('connection', (ws) => {
         .replace(/\D/g, '')
         .slice(0, 4);
       const room = rooms.get(code);
-      // 2026-08-28: 'ended'도 join 허용 — 종료 → 대기실 전환(800ms) 사이 재접속이
-      // 에러로 떨어져 방을 잃는 문제 방지. ended 방은 resetRoomToLobby가 곧 lobby로 복귀시킴.
-      if (!room || (room.phase !== 'lobby' && room.phase !== 'ended')) {
+      const incomingToken = typeof msg.token === 'string' ? msg.token.slice(0, 40) : '';
+      const session = lookupSession(incomingToken);
+      const bySession =
+        session && session.roomCode === code ? room?.players.get(session.playerId) : undefined;
+      const byToken = incomingToken
+        ? [...(room?.players.values() ?? [])].find((p) => p.token === incomingToken)
+        : undefined;
+      const ghost =
+        (bySession && bySession.ws === null ? bySession : null) ||
+        (byToken && byToken.ws === null ? byToken : null);
+      if (byToken && byToken.ws && byToken.ws !== ws) {
+        send(ws, { t: 'err', msg: '이미 이 방에 들어와 있어요.' });
+        return;
+      }
+      const reclaimPlayerId = ghost ? ghost.id : null;
+      const decision = decideJoin({
+        currentRoomCode: slot.room?.code ?? null,
+        targetCode: code,
+        roomFound: Boolean(room),
+        phase: room?.phase ?? '',
+        occupiedSeats: room?.players.size ?? 0,
+        maxPlayers: MAX_PLAYERS,
+        reclaimPlayerId,
+      });
+      if (decision.action === 'already-in') {
+        send(ws, roomPayload(slot.room));
+        return;
+      }
+      if (decision.action === 'reject') {
         send(ws, {
           t: 'err',
-          msg: '대기 중인 방을 찾지 못했어요. 방장이 대기실에 있는지 확인해 주세요.',
+          msg:
+            decision.reason === 'full'
+              ? '방이 가득 찼어요.'
+              : '대기 중인 방을 찾지 못했어요. 방장이 대기실에 있는지 확인해 주세요.',
         });
         return;
       }
-      if (room.players.size >= MAX_PLAYERS) {
-        send(ws, { t: 'err', msg: '방이 가득 찼어요.' });
+      if (decision.action === 'reclaim') {
+        attachSeat(ws, ghost, room, incomingToken);
         return;
       }
+      // 2026-08-28: 'ended'도 join 허용 — 종료 → 대기실 전환(800ms) 사이 재접속이
+      // 에러로 떨어져 방을 잃는 문제 방지. ended 방은 resetRoomToLobby가 곧 lobby로 복귀시킴.
       room.players.set(player.id, player);
       slot.room = room;
       broadcast(room, roomPayload(room));
@@ -698,10 +741,10 @@ wss.on('connection', (ws) => {
         dist(player, target) <= CATCH_DIST + 2
       ) {
         // 2026-08-25: 방어막 서버 권위 — 메시지 캐치도 차단 + 소모
-if (target.shieldUntil && target.shieldUntil > Date.now()) {
-      broadcast(room, { t: 'shieldblock', id: target.id });
-      return;
-    }
+        if (target.shieldUntil && target.shieldUntil > Date.now()) {
+          broadcast(room, { t: 'shieldblock', id: target.id });
+          return;
+        }
         target.out = true;
         broadcast(room, { t: 'caught', id: target.id });
       }

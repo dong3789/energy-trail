@@ -301,6 +301,8 @@ const inviteCode =
   new URLSearchParams(window.location.search).get('room')?.replace(/\D/g, '').slice(0, 4) ?? '';
 let inviteConsumed = false;
 let net: NetClient | null = null;
+let netConnecting: Promise<NetClient | null> | null = null;
+let joinInFlight = false;
 // 2026-08-25: 자동 재연결 상태 — 끊김 시 카운트다운 UI가 활성인지.
 // 활성 중 사용자가 cancel 누르면 즉시 로비로 보냄.
 let reconnectUi: {
@@ -313,34 +315,43 @@ let reconnectUi: {
 
 async function ensureNet(): Promise<NetClient | null> {
   if (net?.connected) return net;
-  const client = new NetClient();
-  const ok = await client.connect(wsUrlFromLocation(window.location));
-  if (!ok) {
-    net = null;
-    return null;
-  }
-  net = client;
-  // 2026-08-28: welcome에서 내려온 토큰을 영속화 — 다음 resume에 사용
-  client.onWelcome = () => {
-    if (client.token) saveSessionToken(client.token);
-  };
-  // 2026-08-25: 연결 끊김 시 —
-  // 멀티플레이: 같은 방 코드로 자동 재연결 (resume → join 폴백).
-  //           사용자가 cancel 누르면 즉시 로비. 마지막 시도도 실패 시 명시적 로비.
-  // 솔로: 게임을 유지하고 다음 ensureNet 호출에서 재연결 (기존 동작).
-  client.onDisconnect = () => {
-    showNetToast('연결이 끊어졌어요');
-    if (matchEntry === 'room') {
-      if (profile.lastRoomCode) {
-        void tryAutoReconnect(profile.lastRoomCode);
-      } else {
-        leaveToLobby();
-      }
-    } else {
+  if (netConnecting) return netConnecting;
+  netConnecting = (async () => {
+    const client = new NetClient();
+    const ok = await client.connect(wsUrlFromLocation(window.location));
+    if (!ok) {
       net = null;
+      return null;
     }
-  };
-  return client;
+    net = client;
+    // welcome의 임시 토큰은 저장하지 않는다. 방에 앉은 뒤(onSeated) 좌석 토큰만 영속화.
+    // welcome을 저장하면 resume 전에 토큰이 바뀌어 join 폴백이 유령 좌석을 남긴다.
+    client.onSeated = (token) => {
+      saveSessionToken(token);
+    };
+    // 2026-08-25: 연결 끊김 시 —
+    // 멀티플레이: 같은 방 코드로 자동 재연결 (resume → join 폴백).
+    //           사용자가 cancel 누르면 즉시 로비. 마지막 시도도 실패 시 명시적 로비.
+    // 솔로: 게임을 유지하고 다음 ensureNet 호출에서 재연결 (기존 동작).
+    client.onDisconnect = () => {
+      showNetToast('연결이 끊어졌어요');
+      if (matchEntry === 'room') {
+        if (profile.lastRoomCode) {
+          void tryAutoReconnect(profile.lastRoomCode);
+        } else {
+          leaveToLobby();
+        }
+      } else {
+        net = null;
+      }
+    };
+    return client;
+  })();
+  try {
+    return await netConnecting;
+  } finally {
+    netConnecting = null;
+  }
 }
 
 // 2026-08-25: 멀티플레이 자동 재연결 — 끊긴 후 같은 code로 재join 시도.
@@ -400,6 +411,7 @@ async function tryAutoReconnect(code: string): Promise<void> {
   // 2026-08-28: resume-first — 저장된 세션 토큰이 있으면 같은 좌석(방장/신원) 복원을
   // 먼저 시도하고, resumeDenied면 기존 join으로 폴백. 성공한 client는 net에 할당.
   let liveClient: NetClient | null = null;
+  const tokenForResume = sessionToken;
   const outcome = await reconnectFlow(code, profile, {
     attempt: async (joinCode, p): Promise<AttemptResult> => {
       // 기존 net 참조 정리 (이미 끊긴 상태)
@@ -422,6 +434,9 @@ async function tryAutoReconnect(code: string): Promise<void> {
       const client = new NetClient();
       const ok = await client.connect(wsUrlFromLocation(window.location));
       if (!ok) return { phase: 'failed' };
+      client.onSeated = (token) => {
+        saveSessionToken(token);
+      };
       // 재연결 시 onDisconnect 발화 방지: 흐름이 관리
       client.onDisconnect = () => {
         /* reconnect 흐름이 관리 */
@@ -440,9 +455,9 @@ async function tryAutoReconnect(code: string): Promise<void> {
         };
         client.onError = () => finish('failed');
         client.onResumeDenied = () => {
-          // 토큰 만료/좌석 소멸 — 일반 join으로 폴백
+          // 토큰 만료/좌석 소멸 — join에 같은 토큰을 실어 유령 좌석 회수
           try {
-            client.join(joinCode);
+            client.join(joinCode, tokenForResume);
           } catch {
             finish('failed');
           }
@@ -455,7 +470,7 @@ async function tryAutoReconnect(code: string): Promise<void> {
             wish: p.roleWish,
             map: p.mapId,
           });
-          if (sessionToken) client.resume(sessionToken);
+          if (tokenForResume) client.resume(tokenForResume);
           else client.join(joinCode);
         } catch {
           finish('failed');
@@ -538,7 +553,7 @@ async function tryAutoReconnect(code: string): Promise<void> {
           wish: profile.roleWish,
           map: profile.mapId,
         });
-        if (sessionToken) c.resume(sessionToken);
+        if (tokenForResume) c.resume(tokenForResume);
         else c.join(code);
       }
     });
@@ -1231,7 +1246,9 @@ function renderRoom(): void {
       joinInput?.focus();
       return;
     }
+    if (joinInFlight || net?.code === entered.code) return;
     void (async () => {
+      joinInFlight = true;
       const client = await ensureNet();
       if (!client) {
         if (joinError) {
@@ -1256,8 +1273,10 @@ function renderRoom(): void {
         gameMode = client.mode === 'classic' ? 'classic' : 'items';
         setScreen('room');
       };
-      client.join(entered.code);
-    })();
+      client.join(entered.code, sessionToken);
+    })().finally(() => {
+      joinInFlight = false;
+    });
   };
   joinInput?.addEventListener('input', () => {
     paintJoinValue(joinInput.value);
@@ -1359,7 +1378,7 @@ function renderRoom(): void {
         beginMatch();
       };
       if (isCreate && !client.code) client.create(profile.mapId);
-      else if (roomCode && !client.code) client.join(roomCode);
+      else if (roomCode && !client.code) client.join(roomCode, sessionToken);
       if (client.code) {
         paintDigits(client.code);
         paintSeats();
