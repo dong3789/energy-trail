@@ -95,12 +95,23 @@ function attachSeat(ws, seat, room, token) {
   seat.lastSeenAt = Date.now();
   sockets.set(ws, { player: seat, room });
   send(ws, { t: 'welcome', id: seat.id, token });
-  send(ws, roomPayload(room));
-  broadcast(room, roomPayload(room));
+  sendRoom(ws, room, seat.id);
+  broadcastRoom(room);
 }
 
 function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+function sendRoom(ws, room, playerId) {
+  send(ws, { ...roomPayload(room), selfId: playerId });
+}
+
+function broadcastRoom(room) {
+  const base = roomPayload(room);
+  for (const p of room.players.values()) {
+    if (p.ws && p.ws.readyState === 1) send(p.ws, { ...base, selfId: p.id });
+  }
 }
 
 function broadcast(room, msg, exceptId = '') {
@@ -278,7 +289,7 @@ function resetRoomToLobby(room) {
     p.vx = 0;
     p.vz = 0;
   }
-  broadcast(room, roomPayload(room));
+  broadcastRoom(room);
 }
 
 function endRoom(room, winner, reason) {
@@ -427,7 +438,7 @@ function leave(ws) {
   }
   if ([...room.players.values()].some((p) => p.ws !== null)) {
     room.emptySince = undefined;
-    broadcast(room, roomPayload(room));
+    broadcastRoom(room);
     return;
   }
   // 모두 연결 끊김 — 좌석은 keep, 방은 grace 후 삭제 (tick)
@@ -494,7 +505,7 @@ wss.on('connection', (ws) => {
       if (typeof msg.wish === 'string') player.wish = msg.wish;
       if (typeof msg.map === 'string' && slot.room && slot.room.hostId === player.id) {
         slot.room.map = msg.map;
-        broadcast(slot.room, roomPayload(slot.room));
+        broadcastRoom(slot.room);
       }
       return;
     }
@@ -537,7 +548,7 @@ wss.on('connection', (ws) => {
       };
       rooms.set(code, room);
       slot.room = room;
-      send(ws, roomPayload(room));
+      sendRoom(ws, room, player.id);
       return;
     }
     if (t === 'join') {
@@ -570,7 +581,7 @@ wss.on('connection', (ws) => {
         reclaimPlayerId,
       });
       if (decision.action === 'already-in') {
-        send(ws, roomPayload(slot.room));
+        sendRoom(ws, slot.room, player.id);
         return;
       }
       if (decision.action === 'reject') {
@@ -591,19 +602,19 @@ wss.on('connection', (ws) => {
       // 에러로 떨어져 방을 잃는 문제 방지. ended 방은 resetRoomToLobby가 곧 lobby로 복귀시킴.
       room.players.set(player.id, player);
       slot.room = room;
-      broadcast(room, roomPayload(room));
+      broadcastRoom(room);
       return;
     }
     const room = slot.room;
     if (!room) return;
     if (t === 'wish' && typeof msg.wish === 'string') {
       player.wish = msg.wish;
-      broadcast(room, roomPayload(room));
+      broadcastRoom(room);
       return;
     }
     if (t === 'char' && typeof msg.char === 'string') {
       player.char = msg.char;
-      broadcast(room, roomPayload(room));
+      broadcastRoom(room);
       return;
     }
     if (
@@ -613,7 +624,7 @@ wss.on('connection', (ws) => {
       room.phase === 'lobby'
     ) {
       room.map = msg.map;
-      broadcast(room, roomPayload(room));
+      broadcastRoom(room);
       return;
     }
     // 2026-08-25: 게임 모드 — items(아이템 배틀) / classic(체급 대결). 호스트만 변경.
@@ -624,7 +635,7 @@ wss.on('connection', (ws) => {
       room.phase === 'lobby'
     ) {
       room.mode = msg.mode === 'classic' ? 'classic' : 'items';
-      broadcast(room, roomPayload(room));
+      broadcastRoom(room);
       return;
     }
     if (
@@ -858,7 +869,7 @@ setInterval(() => {
       rooms.delete(code);
       continue;
     }
-    if (removed) broadcast(room, roomPayload(room));
+    if (removed) broadcastRoom(room);
     // 2026-08-25: 룸 TTL 처리 — phase가 'lobby'이고 생성 후 2시간 지나면 삭제.
     // rooms.delete 도중에 같은 룸을 tickPlaying가 참조하지 않도록 continue로 분리.
     if (now - room.createdAt > ROOM_TTL_MS && room.phase === 'lobby') {

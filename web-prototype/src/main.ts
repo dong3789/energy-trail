@@ -1213,7 +1213,8 @@ function renderRoom(): void {
   };
   startBtn?.addEventListener('click', () => {
     if (!isSolo && net?.connected) {
-      if (!net.isHost) return;
+      // 방 만든 사람은 클라 isHost가 어긋여도 start를 보낸다. 서버가 방장만 통과시킨다.
+      if (!net.isHost && !isCreate) return;
       net.start();
       return;
     }
@@ -1351,8 +1352,9 @@ function renderRoom(): void {
         paintDigits(client.code);
         paintSeats();
         if (startBtn) {
-          startBtn.textContent = client.isHost ? '게임 시작' : '방장 대기 중';
-          startBtn.disabled = !client.isHost;
+          const canStart = client.isHost || isCreate;
+          startBtn.textContent = canStart ? '게임 시작' : '방장 대기 중';
+          startBtn.disabled = !canStart;
         }
       };
       client.onStart = () => {
@@ -1383,8 +1385,9 @@ function renderRoom(): void {
         paintDigits(client.code);
         paintSeats();
         if (startBtn) {
-          startBtn.textContent = client.isHost ? '게임 시작' : '방장 대기 중';
-          startBtn.disabled = !client.isHost;
+          const canStart = client.isHost || isCreate;
+          startBtn.textContent = canStart ? '게임 시작' : '방장 대기 중';
+          startBtn.disabled = !canStart;
         }
       }
     })();

@@ -34,6 +34,11 @@ export interface NetHello {
   map: string;
 }
 
+/** room 메시지의 selfId가 있으면 그걸 내 id로 쓴다. 없으면 기존 id 유지. */
+export function applyRoomSelfId(currentId: string, selfId: unknown): string {
+  return typeof selfId === 'string' && selfId.length > 0 ? selfId : currentId;
+}
+
 export function wsUrlFromLocation(loc: { protocol: string; host: string }): string {
   // 2026-08-25: VITE_WS_URL 오버라이드 — WS를 별도 호스트(Mac mini 외부 등)에 띄울 때 사용.
   // 비어있거나 미정의면 현재 호스트의 /ws 사용 (Mac mini 운영 시 caddy가 프록시).
@@ -94,7 +99,8 @@ export class NetClient {
   private intentionalClose = false;
 
   get isHost(): boolean {
-    return this.id !== '' && this.id === this.hostId;
+    if (this.id !== '' && this.id === this.hostId) return true;
+    return Boolean(this.id && this.players.some((p) => p.host === true && p.id === this.id));
   }
 
   connect(url: string): Promise<boolean> {
@@ -251,6 +257,7 @@ export class NetClient {
     }
     if (t === 'room') {
       const wasMatch = this.phase === 'playing' || this.phase === 'ended';
+      this.id = applyRoomSelfId(this.id, msg.selfId);
       this.code = String(msg.code || '');
       this.hostId = String(msg.hostId || '');
       this.map = String(msg.map || this.map);
