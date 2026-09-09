@@ -26,7 +26,8 @@ node test-scripts/multiplayer.cjs
 
 ## 회귀 방지
 
-서버 `index.mjs` 변경 후 이 테스트 실행 — 멀티플레이 동작 깨지면 fail. CI에 통합 권장.
+서버 `index.mjs` 변경 후 이 테스트 실행 — 멀티플레이 동작 깨지면 fail.
+CI `ws-integration` 잡이 `room-persistence.cjs`와 이 파일을 PR마다 돌린다.
 
 ## 단위 테스트 (vitest)
 

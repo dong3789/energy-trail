@@ -11,6 +11,8 @@
 //   M: 끊김 후 join+token → 유령 좌석 회수 (같은 닉이 두 좌석이 되면 안 됨)
 //   N: 같은 소켓 join 두 번 → 좌석 추가 없음
 //   O: 방장 resume 후 start가 방에 방송되어야 함
+//   P: 토큰 없이 같은 닉 재입장 → 유령 좌석 회수
+//   Q: 유령 좌석이 라이브 만석을 막지 않음
 
 const WebSocket = require('ws');
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:8791/ws';
@@ -228,6 +230,52 @@ async function scenarioO_hostResumeCanStart() {
   B.ws.close();
 }
 
+async function scenarioP_nameReclaimWithoutToken() {
+  log('\n=== P: 토큰 없이 같은 닉 재입장 → 유령 좌석 회수 ===');
+  const A = await client('민수');
+  A.ws.send(JSON.stringify({ t: 'create' }));
+  const roomMsg = await waitEvent(A.events, 'room');
+  const code = roomMsg.code;
+  const B = await client('P2');
+  B.ws.send(JSON.stringify({ t: 'join', code }));
+  await sleep(200);
+  const idA = A.id;
+  A.ws.close();
+  await sleep(300);
+  const C = await client('민수');
+  C.ws.send(JSON.stringify({ t: 'join', code }));
+  const room = await waitEvent(C.events, 'room');
+  const n = room && room.players ? room.players.length : -1;
+  assert(n === 2, `토큰 없이도 좌석 2 (got ${n})`);
+  assert(room && room.players.some((p) => p.id === idA), '같은 id로 회수');
+  C.ws.close();
+  B.ws.close();
+}
+
+async function scenarioQ_ghostsDoNotFillLiveCap() {
+  log('\n=== Q: 유령 좌석이 라이브 만석을 막지 않음 ===');
+  const H = await client('Host');
+  H.ws.send(JSON.stringify({ t: 'create' }));
+  const roomMsg = await waitEvent(H.events, 'room');
+  const code = roomMsg.code;
+  const ghosts = [];
+  for (let i = 0; i < 4; i++) {
+    const g = await client('G' + i);
+    g.ws.send(JSON.stringify({ t: 'join', code }));
+    await sleep(80);
+    ghosts.push(g);
+  }
+  await sleep(200);
+  for (const g of ghosts) g.ws.close();
+  await sleep(300);
+  const N = await client('New');
+  N.ws.send(JSON.stringify({ t: 'join', code }));
+  const room = await waitEvent(N.events, 'room');
+  assert(!!room && room.players.some((p) => p.name === 'New'), '유령 4칸이 있어도 새 닉 입장');
+  N.ws.close();
+  H.ws.close();
+}
+
 async function scenarioN_doubleJoinSameSocket() {
   log('\n=== N: 같은 소켓 join 두 번 → 좌석 추가 없음 ===');
   const A = await client('P1');
@@ -254,6 +302,8 @@ async function main() {
     await scenarioK_resumeTwiceDenied(); await sleep(300);
     await scenarioM_joinTokenReclaimsGhost(); await sleep(300);
     await scenarioO_hostResumeCanStart(); await sleep(300);
+    await scenarioP_nameReclaimWithoutToken(); await sleep(300);
+    await scenarioQ_ghostsDoNotFillLiveCap(); await sleep(300);
     await scenarioN_doubleJoinSameSocket();
     log(`\n=== 결과: ${pass} pass, ${fail} fail ===`);
     process.exit(fail === 0 ? 0 : 1);
