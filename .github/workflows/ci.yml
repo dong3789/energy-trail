@@ -89,3 +89,38 @@ jobs:
         # 2026-08-25: PR마다 jitter/drop 4조건 자동 측정 (baseline/mobile-lte/unstable/extreme-drop)
         # 로컬과 동일한 검증으로 멀티플레이어 동기화 품질 회귀 방지
         run: npm run test:network-sim
+
+  ws-integration:
+    name: WS integration (room + multiplayer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: web-prototype
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web-prototype/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Room persistence + multiplayer
+        run: |
+          set -euo pipefail
+          PORT=8791 node server/index.mjs &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 25); do
+            curl -fsS http://127.0.0.1:8791/health >/dev/null && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:8791/health
+          WS_URL=ws://127.0.0.1:8791/ws node test-scripts/room-persistence.cjs
+          WS_URL=ws://127.0.0.1:8791/ws node test-scripts/multiplayer.cjs

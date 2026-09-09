@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { decideJoin } from './join-policy.mjs';
+import { decideJoin, findGhostByUniqueName } from './join-policy.mjs';
 
 const PORT = Number(process.env.PORT || 8791);
 const TICK_MS = 80;
@@ -563,20 +563,24 @@ wss.on('connection', (ws) => {
       const byToken = incomingToken
         ? [...(room?.players.values() ?? [])].find((p) => p.token === incomingToken)
         : undefined;
-      const ghost =
+      const ghostByToken =
         (bySession && bySession.ws === null ? bySession : null) ||
         (byToken && byToken.ws === null ? byToken : null);
+      const ghostByName =
+        !ghostByToken && room ? findGhostByUniqueName(room.players.values(), player.name) : null;
+      const ghost = ghostByToken || ghostByName;
       if (byToken && byToken.ws && byToken.ws !== ws) {
         send(ws, { t: 'err', msg: '이미 이 방에 들어와 있어요.' });
         return;
       }
+      const liveSeats = [...(room?.players.values() ?? [])].filter((p) => p.ws !== null).length;
       const reclaimPlayerId = ghost ? ghost.id : null;
       const decision = decideJoin({
         currentRoomCode: slot.room?.code ?? null,
         targetCode: code,
         roomFound: Boolean(room),
         phase: room?.phase ?? '',
-        occupiedSeats: room?.players.size ?? 0,
+        liveSeats,
         maxPlayers: MAX_PLAYERS,
         reclaimPlayerId,
       });
@@ -595,7 +599,10 @@ wss.on('connection', (ws) => {
         return;
       }
       if (decision.action === 'reclaim') {
-        attachSeat(ws, ghost, room, incomingToken);
+        ghost.name = player.name;
+        ghost.char = player.char;
+        ghost.wish = player.wish;
+        attachSeat(ws, ghost, room, incomingToken || ghost.token || genToken());
         return;
       }
       // 2026-08-28: 'ended'도 join 허용 — 종료 → 대기실 전환(800ms) 사이 재접속이
@@ -643,6 +650,13 @@ wss.on('connection', (ws) => {
       room.hostId === player.id &&
       (room.phase === 'lobby' || room.phase === 'ended')
     ) {
+      // 유령 좌석은 매치에 넣지 않는다. 끊긴 자리 때문에 5칸이 차는 걸 막는다.
+      for (const p of [...room.players.values()]) {
+        if (p.ws !== null) continue;
+        room.players.delete(p.id);
+        if (p.token) sessions.delete(p.token);
+        if (p.id === room.hostId) room.hostId = player.id;
+      }
       room.roles = assignRoles([...room.players.values()]);
       for (const p of room.players.values()) {
         p.role = room.roles[p.id];
