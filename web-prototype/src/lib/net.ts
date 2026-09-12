@@ -140,11 +140,17 @@ export class NetClient {
   }
 
   hello(info: NetHello): void {
-    this.send({ t: 'hello', name: info.name, char: info.char, wish: info.wish, map: info.map });
+    // multiplay-saas 프로토콜: 게임 프로필은 meta로 전달 (map은 방 config로 분리)
+    this.send({
+      t: 'hello',
+      name: info.name,
+      meta: { char: info.char, wish: info.wish },
+    });
   }
 
   create(map: string): void {
-    this.send({ t: 'create', map });
+    // multiplay-saas 프로토콜: game 필드로 게임 모듈 지정, 맵은 config
+    this.send({ t: 'create', game: 'energy-trail', config: { map } });
   }
 
   join(code: string, resumeToken = ''): void {
@@ -165,11 +171,12 @@ export class NetClient {
   }
 
   setMap(map: string): void {
-    this.send({ t: 'map', map });
+    // multiplay-saas 프로토콜: 호스트의 로비 설정 변경은 config 메시지
+    this.send({ t: 'config', key: 'map', value: map });
   }
 
   setMode(mode: 'items' | 'classic'): void {
-    this.send({ t: 'mode', mode });
+    this.send({ t: 'config', key: 'mode', value: mode });
   }
 
   start(): void {
@@ -260,8 +267,12 @@ export class NetClient {
       this.id = applyRoomSelfId(this.id, msg.selfId);
       this.code = String(msg.code || '');
       this.hostId = String(msg.hostId || '');
-      this.map = String(msg.map || this.map);
-      this.mode = String(msg.mode || this.mode);
+      // multiplay-saas 프로토콜: 맵/모드는 room.config 안에 있다
+      const config = (msg.config && typeof msg.config === 'object'
+        ? msg.config
+        : {}) as Record<string, unknown>;
+      this.map = String(config.map || this.map);
+      this.mode = String(config.mode || this.mode);
       this.phase = String(msg.phase || 'lobby');
       this.players = Array.isArray(msg.players) ? (msg.players as NetPlayerInfo[]) : [];
       if (this.token) this.onSeated?.(this.token, this.id);
